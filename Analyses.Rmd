@@ -1,0 +1,22 @@
+---
+title: "IgaSeq_Analysis"
+author: "Matthew Jackson"
+date: "12/11/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+```
+
+# Overview
+
+This script contains the analyses of IgA-Seq data from a mouse experiment using mice colonised with a previously defined community of 12 murine gut commensals. These were administered IL10R anti-body and two groups set-up, a control and one additionally administered the pathobiont *Helicobacter hepaticus*. The latter group developing colitis. IgA-Seq measures the relative specifity of IgA binding to gut taxa by sorting IgA bound fractions of stool bacteria. This data set provides insight to IgA binding in the colitis model but also provides a controlled model to determine the effect of different starting community structures on IgA binding estimates. Previous indices used to estimate IgA binding have relied on basic ratios that do not account for starting abundances. I have developed a score using Bayes' theroem to take this into account and will compare results using existing and this new index.
+
+## Load in data
+
+```{r}
+
+```
+
