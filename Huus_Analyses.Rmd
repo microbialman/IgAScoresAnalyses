@@ -1,0 +1,30 @@
+---
+title: "Applying Probability-Ratio to Published Data"
+author: "Matthew Jackson"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include = F, message=F, warning=F, echo=F)
+library(here)
+library(IgAScores)
+library(tidyverse)
+library(ggpubr)
+library(ggsci)
+library(pheatmap)
+library(cowplot)
+library(knitr)
+
+theme_set(theme_pubclean())
+
+```
+
+# Overview
+
+The aim of this script is to apply the Probability Ratio to a published dataset. Huus et al. applied the Kau ratio to study binding of bacteria by IgA in under noursihed mice relative to controls, finding they do not develop IgA binding of Lactobacillus in the under nourished state but do conventionally. Here, we carry out a reanalysis of a subset of these data kindly provided by the authors.
+
+

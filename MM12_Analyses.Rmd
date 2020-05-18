@@ -1,0 +1,407 @@
+---
+title: Comparing IgA-Seq scoring methods using a defined gut microbiome in a mouse
+  model of colitis.
+author: "Matthew Jackson"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include = F, message=F, warning=F, echo=F)
+
+#the IgA score generating functions - available on GitHub
+library(IgAScores)
+#various plotting and data manipulation packages
+library(tidyverse)
+library(GGally)
+library(ggpubr)
+library(ggsci)
+library(knitr)
+library(cowplot)
+library(psych)
+library(combinat)
+library(phenoDist)#remotes::install_github("Swarchal/phenoDist)
+library(vegan)
+
+#keep uniformity across plots
+theme_set(theme_pubclean())
+
+```
+
+# Overview
+
+This script contains the analyses of IgA-Seq data from an experiment of a mouse model of colitis, using mice colonised with a defined community of 12 murine gut commensals. The experiment contained two groups, one administered IL10R antibody and the pathobiont *Helicobacter hepaticus* (n=8), which combined cause colitis, a second control group was soley administered the IL10R antibody (n=4). This provides a controlled envrionment to determine the effect of biological, disease related, changes on taxonomic specififty of IgA binding in the gut.
+
+IgA-Seq measures the relative specifity of IgA binding to gut taxa by using FACS to sort highly IgA bound (IgA positive) and less IgA bound (IgA negative) fractions of stool bacteria. Previous indices used to estimate IgA binding have relied on basic ratios of relative abundances in these two fractions to determine specificity of IgA to different microbiota. However, this does do not account for starting abundances or the relative size of the IgA high and low fractions that are sequenced. The following analyses will use the data from the colitis model to compare these previous scores to a novel score I have developed based on Bayes' theroem, which can take these factors into account, and determine the effect this has on experimental results.
+
+# Load data and filter low abundant taxa
+
+IgA-Seq fractions are profiled using 16S rRNA gene sequencing. Here, we have sequenced total stool, and the IgA +ve and IgA -ve fractions. ASVs were enumerated using DADA2 and abundances are summed at the species level. The defined microbiome used in these mice (OligoMM12) typically resolves to 10 species-level abundances using 16S as the *Bifidobacteria* species doesn't colonise the colon and is typically not detected in stool and two *Clostridium* species cannot be resolved from one another just using the V4 region of the 16S rRNA gene. Additionally, we expect to see *Helicobacter hepaticus* in the gavaged samples. However, the experiment is not that clean and simple, there will be additional contaminants from the extraction kits, sorter etc. These will be especially problemtatic in the sorted fractions, which have lower biomass. Here, I visualise the abundances to find a cut-off that will filter out likely noise and contaminants.
+
+```{r metadata_and_norm,  fig.width=10, fig.height=12}
+#metadata for all samples, relabel vars for  plot consistency
+data(oligoMeta)
+meta <- oligoMeta
+meta$SortFraction <- as.character(meta$SortFraction)
+meta$SortFraction[meta$SortFraction=="pos"] <- "Pos"
+meta$SortFraction[meta$SortFraction=="neg"] <- "Neg"
+meta$SortFraction[meta$SortFraction=="whole"] <- "Pre-sort"
+meta$SortFraction <- factor(meta$SortFraction, levels=c("Pre-sort","Pos","Neg"))
+
+meta$Group <- as.character(meta$Group)
+meta$Group[meta$Group=="HHaIL10R"] <- "Hh+aIL10R"  
+meta$Group[meta$Group=="antiIL10R"] <- "aIL10R"  
+meta$Group <- factor(meta$Group)
+
+#these are the expected genera in the OligoMM12 and Helicobacter
+refspecies <- c("Acutalibacter muris KB18",
+"Akkermansia muciniphila YL44",
+"Bacteroides caecimuris strain 148",
+"Bifidobacterium animalis subsp animalis YL2",
+"Blautia coccoides YL58",
+"Clostridium clostridioforme YL32",
+"Clostridium inocuum 146",
+"Enterococcus faecalis KB1",
+"Flavonifractor plautii YL31",
+"Lactobacillus reuteri 149",
+"Muribaculum intestinale YL27",
+"Turicimonas muris YL45",
+"Helicobacter hepaticus")
+#these are the genus/species level names we typically see assigned to the above species (same order) using the reference database we have used for this experiment
+keepspecies <- c("Clostridium XlVa;s__NA",
+"Akkermansia;s__Akkermansia_muciniphila(AY271254)",
+"Bacteroides;s__NA",
+"Not_detected_in_colon_or_stool",
+"Blautia;s__Blautia_hansenii(AB534168)",
+"Clostridium XlVa;s__NA",
+"Erysipelotrichaceae incertae sedis;s__NA",
+"Enterococcus;s__NA",
+"Flavonifractor;s__Flavonifractor_plautii(AY724678)",
+"Lactobacillus;s__Lactobacillus_oris(X94229)",
+"Barnesiella;s__NA",
+"Parasutterella;s__NA",
+"Helicobacter;s__Helicobacter_hepaticus(U07574)")
+
+#read in the species level abundances
+data(oligoSpecies)
+abunds <- oligoSpecies
+
+#Clean-up, lot of noise from contaminants, esp. in the low biomass sorted fractions
+
+#remove taxa found in the sequencing control that are not part of the OligoMM12
+nonneg <- which((abunds$NegCtrlQiagen!=0)&(!taxnamesplit(rownames(abunds),"genus")%in%keepspecies))
+abunds <- abunds[-nonneg,] %>% select(-"NegCtrlQiagen")
+#remove taxa observed in less than 4 samples (single cage size)
+abunds <- abunds[-which(rowSums(abunds>1)<4),]
+
+#generate relative abundances
+abunds <- relabund(abunds,FALSE)
+
+cutthresh=1e-3
+
+#function to plot the relative abundances of genera per sample, coloring the oligomm12, helicobacter and others differently
+abundplot <- function(atab){
+  longa <- atab %>% rownames_to_column(var="Taxa") %>% gather("Sample","Abundance",-Taxa)
+  tnames <- taxnamesplit(longa$Taxa,level = "genus")
+  longa <- longa %>% add_column(Source=ifelse(tnames%in%keepspecies,"OligoMM12","Other")) %>%
+  mutate(Source=ifelse(tnames=="Helicobacter;s__Helicobacter_hepaticus(U07574)","Hh",Source)) %>%
+  add_column(Condition=meta$Group[match(.$Sample,meta$SampleID)],Fraction=meta$SortFraction[match(.$Sample,meta$SampleID)]) %>% filter(Abundance>0)
+  p <- longa %>% ggplot(aes(x=Sample,y=Abundance,col=Source))+geom_point()+coord_flip()+scale_y_log10()+geom_hline(yintercept = cutthresh, lty=2, col="DarkGrey")+facet_wrap(Fraction~Condition,scales="free", nrow=3)+scale_color_brewer(palette = "Set1")
+  return(p)
+}
+
+initialplot <- abundplot(abunds)
+
+#filter out the Hh samples that didn't get colonised
+abunds <- abunds[,-grep(c("CM1|CM2|CM3|CM4"),colnames(abunds))]
+#generate filtered meta
+meta <- meta %>% filter(SampleID%in%colnames(abunds))
+
+hhrem <- abundplot(abunds)
+
+#plot to assess a suitable low abundance cutoff
+testcuts <- c(1e-5,1e-4,1e-3,1e-2,1e-1)
+ntax <- c()
+abunleft <- c()
+contamrat <- c()
+for(i in testcuts){
+  temp <- abunds
+  temp[temp<i] <- 0
+  rem <- which(rowSums(temp>i)<4)
+  if(length(rem)>0){
+  temp <- temp[-rem,]}
+  ntax <- c(ntax,nrow(temp))
+  abunleft <- c(abunleft,mean(colSums(temp)))
+  namer <- taxnamesplit(rownames(temp),level = "genus")
+  crat <- colSums(temp[!namer%in%keepspecies,])/colSums(temp[namer%in%keepspecies,])
+  contamrat <- c(contamrat,mean(crat[crat!=Inf]))
+}
+threshdf <- data.frame(Threshold=testcuts,ntax=ntax,abun=abunleft,contamrat=contamrat)
+tx <- threshdf %>% ggplot(aes(x=Threshold,y=ntax))+geom_point()+geom_line()+scale_x_log10()+ylab("No. Taxa Remaining")
+ab <- threshdf %>% ggplot(aes(x=Threshold,y=abun))+geom_point()+geom_line()+scale_x_log10()+ylab("% Starting Abundance Remaining")
+crt <- threshdf %>% ggplot(aes(x=Threshold,y=contamrat))+geom_point()+geom_line()+scale_x_log10()+ylab("Ratio Unexpected/Expected Taxa")
+tplot <- plot_grid(tx,ab,crt,nrow=1)
+
+#generate screened table (seting taxa below 1e-3 to zero and removing rare observations) - this cut-off is taken from looking at the previous plot
+screena <- abunds
+screena[screena<cutthresh] <- 0
+#remove taxa not observed the pre-sort sample for each mouse
+for(i in unique(meta$Individual)){
+  wsamp <- meta$SampleID[meta$Individual==i&meta$SortFraction=="Pre-sort"]
+  allsamps <- meta$SampleID[meta$Individual==i]
+  keeptax <- rownames(screena)[screena[,colnames(screena)==wsamp]>0]
+  screena[which(!rownames(screena)%in%keeptax),which(colnames(screena)%in%allsamps)] <- 0
+}
+screena <- screena[-which(rowSums(screena>0)<4),]
+
+screenedplot <- abundplot(screena)
+
+```
+
+```{r initplot, include=T, fig.width=10, fig.height=12}
+plot(initialplot)
+```
+
+On this plot it is clear that there is more noise in the IgA fractions (with lower biomass and sorted). For instance, even samples that were expected not to have *Helicobacter* have a few counts. However, these are at the same low levels as the other contaminants. We expect some level of barcode switching in the sequencing and there is potential for low-level cross contamination after DNA has been extracted. In the *H.hepaticus* colonised samples the levels are much higher and consistent across the different IgA fractions, however it does appear that one cage of the *Hepaticus* gavaged mice did not get colonised properly so these will be excluded from later analyses - making a 4 vs 4 comparison. 
+
+```{r remplot, include=T, fig.width=10, fig.height=12}
+plot(hhrem)
+```
+
+The above plot shows samples retained for analysis prior to abundance cut-off screening.
+
+```{r threshplot, include=T, fig.width=10, fig.height=4}
+plot(tplot)
+```
+
+As can be seen in the previous two plots, across all the samples, an abundance cut-off of 1e-3 provides a reasonabel filtering of low abundance contaminants whilst retaining the majority of abundance. Additionally only taxa observed in the pre-sort sample will be retained in the IgA+ and IgA- fractions to account for contaminants introduced by sorting. A plot showing the cleaned samples after this filtering is shown below:
+
+```{r filtplot,include=T, fig.width=10, fig.height=12}
+plot(screenedplot)
+```
+
+# Abundance and beta-diversity plots
+
+```{r abund_plot, include=T, fig.width=10, fig.height=5}
+summedscreen <- rbind(screena,"g__;s__Other"=1-colSums(screena))
+longa <- summedscreen %>% rownames_to_column("ASV") %>% gather("Sample","Abundance",-ASV) %>% add_column(Fraction=meta$SortFraction[match(.$Sample,meta$SampleID)], Group=meta$Group[match(.$Sample,meta$SampleID)], Individual=meta$Individual[match(.$Sample,meta$SampleID)]) %>% add_column(ASVName=ifelse(taxnamesplit(.$ASV,"species")=="NA",taxnamesplit(.$ASV,"genus"),taxnamesplit(.$ASV,"species")))
+
+longa %>% ggplot(aes(x=Individual,y=Abundance,fill=ASVName))+geom_col()+facet_grid(Group~Fraction,scales="free")+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())+scale_fill_igv()+labs(fill="ASV",x="Mouse")+theme(legend.text = element_text(size=8),legend.spacing.x =unit(2,"pt"),legend.title = element_blank())
+```
+
+```{r mds_calc, include=F, echo=F}
+
+bray <- t(summedscreen) %>% metaMDS(distance="bray")
+bmet <- cbind(meta,bray$points)
+```
+```{r mds_plot, include=T, fig.width=7, fig.height=6}
+bmet %>% mutate(SortFraction=factor(SortFraction,levels=c("Neg","Pos","Pre-sort"))) %>% ggplot(aes(x=MDS1,y=MDS2,col=SortFraction,shape=Group))+geom_point(size=5)+scale_shape_manual(values=c(19,8))+scale_color_d3()+theme(legend.title = element_blank())
+
+```
+
+# Formatting data for the IgA scores package
+
+Below is code showing how data should be formatted to use the IgAScores package.
+
+```{r format_tables, include=T, echo=T}
+
+#create dataframes with the relative abundances (summing to 1 not 100) for each fraction, these should have matching indivudal ids for columns
+posabunds <- screena %>% select(as.character(meta$SampleID[meta$SortFraction=="Pos"]))
+negabunds <- screena %>% select(as.character(meta$SampleID[meta$SortFraction=="Neg"]))
+wholeabunds <- screena %>% select(as.character(meta$SampleID[meta$SortFraction=="Pre-sort"]))
+
+colnames(posabunds) <- meta$Individual[match(colnames(posabunds),meta$SampleID)]
+colnames(negabunds) <- meta$Individual[match(colnames(negabunds),meta$SampleID)]
+colnames(wholeabunds) <- meta$Individual[match(colnames(wholeabunds),meta$SampleID)]
+
+#create a minimal metadata set that is on a per individual basis
+igameta <- meta %>% filter(meta$SortFraction=="Pos") %>% select(Individual,Group,PercentIgAneg,PercentIgApos) %>% 
+  rename(PosFrac=PercentIgApos, NegFrac=PercentIgAneg)
+
+#make named vectors for pos and negative gate sizes (% of events that ended up in that gate, again sum to 1 not 100)
+possizes <- igameta$PosFrac/100
+names(possizes) <- igameta$Individual
+negsizes <- igameta$NegFrac/100
+names(negsizes) <- igameta$Individual
+
+#set a pseudocount, this should be smaller and around the same magnitudeutide as minimum observed abundance
+print(min(screena[screena!=0]))
+pseudo <- 1e-3
+
+```
+
+# Comparison of IgA fraction sizes between groups
+
+```{r, include=T, fig.width=5, fig.height=4.4}
+
+df <- data.frame(Group=rep(igameta$Group,2),FracSize=c(igameta$NegFrac,igameta$PosFrac),Frac=c(rep("IgA-",nrow(igameta)),rep("IgA+",nrow(igameta))))
+df %>% ggplot(aes(x=Group,y=FracSize,col=Group))+geom_boxplot(outlier.shape=NA)+geom_point()+facet_wrap(.~Frac,scales = "free")+ylab("Fraction Size (% Bacteria)")+theme(axis.title.x = element_blank())+
+  scale_color_manual(values=c("black","red"))
+```
+```{r, include=T, fig.width=5, fig.height=4.4}
+#as above with pvalues
+df %>% ggplot(aes(x=Group,y=FracSize,col=Group))+geom_boxplot(outlier.shape=NA)+geom_point()+facet_wrap(.~Frac,scales = "free")+ylab("Fraction Size (% Bacteria)")+theme(axis.title.x = element_blank())+
+  scale_color_manual(values=c("black","red"))+stat_compare_means()
+
+```
+
+# Calculate IgA scores using the different scoring approaches
+
+Below is the code used to generate the various scores using the IgAScores package.
+
+```{r make_scores, echo=T, include=T}
+#generate the scores, note each methods requires different inputs
+palm <- igascores(posabunds = posabunds, negabunds=negabunds, pseudo = pseudo, method="palm")
+kau <- igascores(posabunds = posabunds, negabunds=negabunds, pseudo = pseudo, method="kau")
+posprob <- igascores(posabunds = posabunds, possizes = possizes, totabunds = wholeabunds, method="prob")
+probrat <- igascores(posabunds = posabunds, negabunds = negabunds, possizes = possizes, negsizes = negsizes, pseudo = pseudo, method="probratio")
+
+```
+
+```{r reform_long}
+#create long formats of the scores and initial abundances for plotting 
+makelong <- function(table,name,meta){
+  table <- table %>% rownames_to_column(var="Taxa") %>%  gather("Sample","Score",-Taxa) %>% mutate(Method=rep(name,nrow(.))) %>% add_column(Condition=meta$Group[match(.$Sample,meta$Individual)])
+}
+#scores
+palml <- makelong(palm,"Palm",meta)
+kaul <- makelong(kau,"Kau",meta)
+posprobl <- makelong(posprob,"Positive Probability",meta)
+probratl <- makelong(probrat,"Probability Ratio",meta)
+
+#combined version for doing pariwise plots (ggpairs below)
+combinedw <- palml %>% rename(Palm=Score) %>% add_column(Kau=kaul$Score, ProbRat=probratl$Score, PosProb=posprobl$Score) %>% select(-Method)
+```
+
+# Correlation of scores between methods
+
+All scoring methods and abundances:
+
+```{r all_cor, include=T, fig.width=12, fig.height=12}
+#all methods
+combinedw %>% select(Palm, Kau, ProbRat, PosProb) %>% ggpairs()
+```
+
+Just ratio based scores:
+
+```{r ratio_cor, include=T, fig.width=6, fig.height=6}
+#just ratio based scores
+combinedw %>% select(Palm, Kau, ProbRat) %>% rename("Probability\nRatio"=ProbRat) %>% ggpairs()+theme_classic2()
+
+#check significance of correlations
+combinedw %>% select(Palm, Kau, ProbRat) %>% corr.test()
+
+```
+
+# Inter-group score comparisons
+
+Comapring the IgA binding of each species between the two different groups (aIL10R+Hh vs aIL10R only) using the different methods.
+
+```{r comp_fun}
+#function to compare groups
+CompareCond <- function(tab,cutoff){
+  ps <- c()
+  means <- c()
+  #remove hh as the estimates are all 0 for one conditon negating comparisons
+  tab <- tab %>% filter(!grepl("Helico",Taxa))
+  
+  #small sample sizes so calculate p using all possible permuations of mean difference
+  for(i in unique(tab$Taxa)){
+    ail <- na.omit(tab$Score[tab$Condition=="aIL10R"&tab$Taxa==i])
+    hh <- na.omit(tab$Score[tab$Condition=="Hh+aIL10R"&tab$Taxa==i])
+    p <- NA
+    if(length(ail)==4&length(hh)==4){
+      diff <- abs(mean(ail)-mean(hh))
+      #calculate all posisble permuations
+      allvals <- c(ail,hh)
+      allperm <- permn(c(1:8))
+      #test perms
+      permmeans <- unlist(lapply(allperm, function(x) abs(mean(allvals[x[1:4]])-mean(allvals[x[5:8]]))))
+      #p is how many of all the tests the differ greater or equal than the true difference
+      p <- mean(permmeans>=diff)
+    }
+    ps <- c(ps,p)
+  }
+  #summarise p values in a table
+  restab <- data.frame(Taxa=taxnamesplit(unique(tab$Taxa)),p=ps) %>% arrange(p)
+  tab$Taxa <- taxnamesplit(tab$Taxa)
+  #get order of mean Iga score to sort plot
+  means <- tab %>% group_by(Taxa) %>% summarise(Means=mean(Score)) %>% arrange(Means)
+  #raw plot of mean and 95% ci for each of the groups (boxplot not too informative with 4 samples)
+  plot <- tab %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% ggplot(aes(x=Taxa,y=Score,col=Condition))+stat_summary(position = position_dodge(width = 0.5),fun.data = "mean_ci")+geom_point(position=position_dodge(width=0.5),shape=9)+coord_flip()+scale_color_manual(values=c("black","red"))+theme(axis.title.y = element_blank())
+  #just plot significant differences
+  sigres <-  restab %>% filter(p<cutoff)
+  sigplot <- tab %>% filter(Taxa%in%sigres$Taxa) %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% ggplot(aes(x=Taxa,y=Score,col=Condition))+stat_summary(position = position_dodge(width = 0.5),fun.data = "mean_ci")+geom_point(position=position_dodge(width=0.5),shape=9)+coord_flip()+scale_color_manual(values=c("black","red"))+theme(axis.title.y = element_blank())+geom_hline(yintercept = 0, col="lightgrey")
+  #get the effect size for signficant differences (use strictly standardised mean difference - mean difference normalised to SD to make comparable between scores)
+  fcp <- tab %>% filter(Taxa%in%sigres$Taxa) %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% group_by(Taxa) %>%  summarise(SSMD=ssmd(c(Score[Condition=="Hh+aIL10R"]),c(Score[Condition=="aIL10R"]),verbose = F)) %>% add_column(Dir=ifelse(.$SSMD>0,"A","B")) %>%
+    ggplot(aes(x=Taxa,y=SSMD,fill=Dir))+geom_col(position = position_dodge(width=0.5), width = 0.3)+coord_flip()+theme(axis.title.y = element_blank(),axis.text.y = element_blank(),axis.ticks.y = element_blank())+ylab("Strictly standardised\nmean difference")+scale_fill_manual(values=c("forestgreen","darkred"))+guides(fill=F)+geom_hline(yintercept = 0, col="lightgrey")
+  #put the effect size plot alongside the values plot
+  sigwitheffsize=plot_grid(sigplot,fcp,align="h",axis = "t",rel_widths = c(0.8,0.2))
+  return(list(table=restab,barplot=plot,sigplot=sigwitheffsize))
+}
+
+```
+
+## Palm index
+
+```{r palm_bet, include=T, fig.width=10, fig.height=8}
+palmcomp <- CompareCond(palml,0.1)
+kable(palmcomp$table)
+plot(palmcomp$barplot+scale_y_log10()+ylab("Score (log10 Axis)"))
+
+```
+
+
+```{r palmsig, fig.width=8, fig.height=4, include=T}
+plot(palmcomp$sigplot)
+```
+
+## Kau index
+
+```{r kau_bet, include=T, fig.width=10, fig.height=8,  include=T}
+kaucomp <- CompareCond(kaul,0.1)
+kable(kaucomp$table)
+plot(kaucomp$barplot)
+
+```
+
+
+```{r kausig, fig.width=10, fig.height=4,  include=T}
+plot(kaucomp$sigplot)
+```
+
+## Probability ratio
+
+```{r probrat_bet, include=T, fig.width=10, fig.height=8}
+probcomp <- CompareCond(probratl,0.1)
+kable(probcomp$table)
+plot(probcomp$barplot)
+```
+
+```{r prsig, fig.width=10, fig.height=4, include=T}
+plot(probcomp$sigplot)
+```
+
+# Comparison of normalised Akkermansia abundance
+
+This bar chart will show how by adjusting for the amount of inital bacteria falling into the IgA+ fraction, the reduced relative abudance of Akkermanisa in the IgA+ fraction still represents an increase in bound Akkermansia overall.
+
+```{r akker, include=T, fig.height=5, fig.width=6}
+akbunds <- as.vector(t(posabunds["p__Verrucomicrobia;c__Verrucomicrobiae;o__Verrucomicrobiales;f__Verrucomicrobiaceae;g__Akkermansia;s__Akkermansia_muciniphila(AY271254)",as.character(igameta$Individual)]))
+akmeta <- igameta %>% mutate(PosFrac=PosFrac/100) %>% add_column(Abund=akbunds) %>% add_column(AdjAbund=.$PosFrac*.$Abund) %>% select(Group,PosFrac,Abund,AdjAbund) %>% gather("Measure","Value",-Group) %>% mutate(Value=Value*100, Measure=factor(Measure))
+
+levels(akmeta$Measure) <- c("IgA+ Abundance","IgA+ Abundance\nAdjusted for IgA+ Size","IgA+ Size")
+akmeta$Measure <- factor(akmeta$Measure,levels=levels(akmeta$Measure)[c(1,3,2)])
+
+akmeta %>% ggplot(aes(x=Group,y=Value,color=Group))+geom_boxplot(outlier.shape = NA)+geom_point()+facet_wrap(.~Measure,scales="free_y")+scale_color_manual(values=c("black","red"))+guides(fill=F)+ylab("Fraction Size/A.muciniphila Abundance (%)")+theme(axis.title.x = element_blank())
+
+```
+
+
+
+
+
+

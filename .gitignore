@@ -1,0 +1,7 @@
+.DS*
+MM12_Analyses_files
+*.html
+*.pdf
+._*
+.Rhistory
+*~

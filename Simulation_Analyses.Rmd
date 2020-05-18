@@ -1,0 +1,275 @@
+---
+title: "IgA-Seq simulation and scoring comparison."
+author: "Matthew Jackson"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include = F, message=F, warning=F, echo=F)
+
+library(IgAScores)
+library(tidyverse)
+library(ggpubr)
+library(ggsci)
+library(pheatmap)
+library(cowplot)
+library(knitr)
+
+theme_set(theme_pubclean())
+
+```
+
+# Overview
+
+The aim of this script is to benchmark existing IgA-Seq scoring approaches against our novel probability based methods. However, biologically derived datasets are problematic for benchmarking as we do not know the true IgA specificities underlying observations. To overcome this we will simulate an IgA-Seq experiment with bacteria with pre-defined IgA binding specificities and use the simulated data to compare the results of different scoring approaches and find which best recapitulates the known values.
+
+# Simulate an IgA-Seq experiment
+
+Data from a simulated IgA-Seq experiment will be generated using the *simulateigaseq()* function from the IgAScores package. In brief, this works by creating a set of normal distributions for arbitrary IgA binding values that are unique to each species (different mean binding level). A set of samples are then generated with a log distributed abundance pattern for these species that is unique to each sample. IgA binding values are then assigned to each bacteria in each sample, sampling the value from the distribution for that species. High and low thresholds are then used to determine which bacteria have a sufficiently high IgA value to fall into the IgA postive gate or low enough to be in the IgA negative gate. The bacterial counts in each of these gates, and the starting counts for each sample, can then be used to calculate the IgA scoring metrics as with conventional data. Code to generate the simulated dataset is given below.
+
+```{r generate_data, include=T, echo=T}
+#will use the simulation defaults
+dat <- simulateigaseq(nosamples =30)
+#make all the returned items available in the global environment (could also assign individually or use $ notation)
+invisible(list2env(dat,globalenv()))
+```
+
+## Distribution of IgA binding values per species
+
+Each of the **`r nrow(wholecounts)`** species has its own IgA value distribution. This is analgous to the differing IgA binding affinities of real taxa - which IgA-Seq aims to determine.
+In the simulation we use an arbitrary IgA binding value, its units are not important just that it provides a measure of binding relative between taxa. Below are the value distributions used in the simulation.
+The high and low cut-offs used to define the IgA postive and negative gates are also shown (dashed lines, everything to the right of the higher line being IgA +ve and to the left of the lower line IgA -ve).
+
+```{r density_plot, include=T, fig.width=8, fig.height=4}
+speclevs <- paste0("Species",c(1:length(levels(igabinding$Species))))
+igabinding$Species <- factor(igabinding$Species,levels=speclevs)
+igabinding %>% ggplot(aes(x=IgAValue,color=Species))+geom_density()+geom_vline(xintercept = c(posthresh,negthresh),lty=2,col=c("darkgrey"))+scale_color_d3()+ylab("Density")+xlab("IgA Value")
+
+```
+
+# Comparison of indices
+
+## Taxonomic abundances
+
+Relative abundances were generated from simulated counts. These will be used to generate scores.
+
+```{r gen_abund, include=T, fig.width=8, fig.height=4.8}
+
+wholel <- wholeabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pre-sort",nrow(.)))
+posl <- posabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pos",nrow(.)))
+negl <- negabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Neg",nrow(.)))
+combinedl <- rbind(wholel,posl,negl) %>% mutate(Sample=factor(Sample,levels=colnames(wholeabunds)), Species=factor(Species,levels=speclevs),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg")))
+
+combinedl %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(.~Fraction)+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())
+
+```
+
+## IgA fraction sizes
+
+```{r frac_sizes, include=T, fig.width=7, fig.height=3}
+
+fracsizes <- data.frame(Fraction=c(rep("Pos",length(possizes)),rep("Neg",length(negsizes))),Size=c(possizes,negsizes),Sample=rep(names(possizes),2)) %>% mutate(Sample=str_replace(Sample,"Sample","")) %>% mutate(Sample=factor(Sample,levels=c(1:ncol(wholeabunds))))
+
+fracsizes %>% ggplot(aes(x=Sample,y=Size*100,fill=Fraction))+geom_col(position = "dodge")+scale_fill_d3()+xlab("Sample")+ylab("Size (% Bacteria)")
+```
+
+
+# Compare scores
+
+Scores are generated to quantify the IgA binding from the simulated data using the various scoring approaches. As we know the underlying distribution of mean IgA scores, we now have a "gold-standard" to compare the index estimates against. We also know that the IgA binding means should be identical in all the samples, so the level of variance in the scores will show how influenced they are by the starting abundances (which is the only thing that differs between samples).
+
+```{r make_scores}
+#pseudo count is set by looking at the range of the minimum non-zero values in the pos, whole and neg abundance tables. The lowest being 1e-5
+pseudo=1e-5
+
+palm <- igascores(posabunds = posabunds,negabunds=negabunds, pseudo = pseudo, method="palm")
+kau <- igascores(posabunds = posabunds,negabunds=negabunds, pseudo = pseudo, method="kau")
+posprob <- igascores(posabunds = posabunds, possizes = possizes, totabunds = wholeabunds, method="prob")
+probrat <- igascores(posabunds = posabunds, negabunds = negabunds, possizes = possizes, negsizes = negsizes, pseudo = pseudo, method="probratio")
+
+```
+
+
+## Heatmaps
+
+In this simulation the underlying mean IgA value for each species is not changed, only the realtive abundance distribution of the species to start with.
+A score that most accurately reflects the likelihood that a specific taxa is bound to IgA should therefore produce similar estimates across all the samples (i.e. not be influenced by the abundance differences).
+
+```{r heats, fig.width=8, fig.height=6, include=T}
+#function to generate the heatmap
+rowannot <- data.frame(True=igavalmeans)
+pheatmap(palm,annotation_row = rowannot, main = "Palm")
+pheatmap(kau,annotation_row = rowannot, main ="Kau")
+pheatmap(posprob,annotation_row = rowannot, main="Positive Probability")
+pheatmap(probrat,annotation_row = rowannot, main="Probability Ratio")
+```
+
+## Variation comparison
+
+```{r cov, include=T, fig.width=6, fig.height=4}
+#functions to generate coeffcient of variation for scores
+cv <- function(vals){
+  return(sd(vals)/mean(vals))
+}
+getcov <- function(tab,name){
+  covs <- apply(tab,1,cv)
+  names <- rep(name,length(covs))
+  return(data.frame(CV=abs(covs),Score=names,Species=rownames(tab)))
+}
+#generate for each score and compare across
+cvs <- rbind(getcov(palm,"Palm"),getcov(kau,"Kau"),getcov(posprob,"Positive Probability"),getcov(probrat,"Probability Ratio"))
+cvs$Species <- factor(cvs$Species,levels=speclevs)
+cvs %>% ggplot(aes(y=CV, x=Score))+geom_boxplot()+geom_point(aes(color=Species))+scale_y_log10()+scale_color_d3()+ylab("Coefficient of Variance")+guides(color=F)
+
+cvs %>% compare_means(data=.,CV~Score) %>% kable
+
+```
+
+## Correlation plots
+
+```{r cors, include=T, fig.width=6.3, fig.height=7}
+corplotfun <- function(tab,meanvals,title){
+  scores <- gather(data.frame(t(tab)))
+  scores$true <- meanvals[scores$key] 
+  df <- data.frame(Scores=scores$value,True=scores$true,Species=scores$key)
+  p <- ggplot(df,aes(y=True,x=Scores))+geom_point(aes(col=Species))+xlab("Species Mean IgA Value")+ggtitle(title)+stat_cor(method="spearman",label.y = 0,cor.coef.name="rho")+stat_cor(method="pearson",label.y =-0.25)+scale_color_d3()+guides(col=F)+theme_classic()+ylab("True IgA Value")+xlab("Score Value")
+  return(p)
+}
+
+plist <- list(corplotfun(palm,igavalmeans,"Palm"),corplotfun(kau,igavalmeans,"Kau"),corplotfun(posprob,igavalmeans,"Positive Probability"),corplotfun(probrat,igavalmeans,"Probability Ratio"))
+
+plot_grid(plotlist = plist, align = "hv")
+```
+
+# Between group simulation
+
+We can see that the probability ratio is most correlated with IgA binding specificity. However, the simple Kau ratio is also highly correlated. The main difference between them is the increased variability in the Kau index, which is more influenced by the starting abundances of species. This may be more problematic in cases where we expect an inherent between group variability in starting abundances (for instance comparing healthy and disease patients) - this may then artifcially induce differences in the IgA specificity between the groups.
+
+```{r generate_data_between, include=T, echo=T}
+#will use the same means as before, changing seed to genereate new abundance distributions
+betweendat <- simulateigaseq(igavalmeans = dat$igavalmeans, nosamples = 60,  betweenper = 50, betweengroups = T, betweensp = 10, seed=67)
+```
+
+## Distribution of IgA binding values per species
+
+```{r density_plot_between, include=T, fig.width=8, fig.height=6}
+betweendat$igabinding$Species <- factor(betweendat$igabinding$Species,levels=speclevs)
+betweendat$igabinding %>% ggplot(aes(x=IgAValue,color=Species))+geom_density()+geom_vline(xintercept = c(posthresh,negthresh),lty=2,col=c("darkgrey"))+scale_color_d3()+ylab("Density")+xlab("IgA Value")
+
+```
+
+## Taxonomic abundances
+
+Relative abundances were generated from simulated counts. These will be used to generate scores. In this case, additional counts were added to **`r betweendat$expspecies`** in **Sample`r round(ncol(betweendat$wholeabunds)/2)`** to **Sample`r ncol(betweendat$wholeabunds)`**.
+
+```{r gen_abund_bet, include=T, fig.width=8, fig.height=4.8}
+
+wholelb <- betweendat$wholeabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pre-sort",nrow(.)))
+poslb <- betweendat$posabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pos",nrow(.)))
+neglb <- betweendat$negabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Neg",nrow(.)))
+combinedlb <- rbind(wholelb,poslb,neglb) %>% mutate(Sample=factor(Sample,levels=colnames(betweendat$wholeabunds)),Species=factor(Species,levels=rownames(betweendat$wholeabunds)),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg"))) %>% add_column(Group=ifelse(betweendat$expgroup[.$Sample]=="1","Control","Case"))
+
+combinedlb %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(Group~Fraction,scales="free")+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())
+
+```
+
+## IgA fraction sizes
+
+```{r frac_sizes_bet, include=T, fig.width=4, fig.height=2.85}
+casecon <- ifelse(betweendat$expgroup==1,"Control","Case")
+fracsizesb <- data.frame(Fraction=c(rep("Pos",length(betweendat$possizes)),rep("Neg",length(betweendat$negsizes))),
+                         Size=c(betweendat$possizes,betweendat$negsizes),Sample=rep(names(betweendat$possizes),2), Group=factor(rep(casecon,2))) %>% mutate(Sample=factor(Sample,levels=names(betweendat$possizes)))
+
+fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction))+scale_fill_d3()+theme(axis.title.x = element_blank())+ylab("Size (% Bacteria)")+facet_wrap(.~Fraction,scales ="free")+
+  guides(fill=F)+stat_compare_means(label.x = 1)
+```
+
+
+
+
+```{r,  include=T, fig.width=4, fig.height=2.85}
+#without pvalues
+fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction))+scale_fill_d3()+theme(axis.title.x = element_blank())+ylab("Size (% Bacteria)")+facet_wrap(.~Fraction,scales ="free")+
+  guides(fill=F)
+```
+
+
+# Compare scores
+
+```{r make_scores_bet}
+#pseudo count is set by looking at the range of the minimum non-zero values in the pos, whole and neg abundance tables. The lowest being 1e-5
+pseudo=1e-5
+
+palmb <- igascores(posabunds = betweendat$posabunds,negabunds=betweendat$negabunds, pseudo = pseudo, method="palm")
+kaub <- igascores(posabunds = betweendat$posabunds,negabunds=betweendat$negabunds, pseudo = pseudo, method="kau")
+posprobb <- igascores(posabunds = betweendat$posabunds, possizes = betweendat$possizes, totabunds = betweendat$wholeabunds, method="prob")
+probratb <- igascores(posabunds = betweendat$posabunds, negabunds = betweendat$negabunds, possizes = betweendat$possizes, negsizes = betweendat$negsizes, pseudo = pseudo, method="probratio")
+
+```
+
+## Heatmaps
+
+In this simulation the underlying mean IgA value for each species is not changed, only the realtive abundance distribution of the species to start with, additionally we now have a subset of half the samples which have an increased abundaunce of **`r betweendat$expspecies`**. Ideally, we want a score that will not observe a change here if it represents IgA binding affinity.
+
+```{r heats_bet, fig.width=8, fig.height=5, include=T}
+#function to generate the heatmap
+rowannotb <- data.frame(True=betweendat$igavalmeans)
+colannotb <- data.frame(Group=casecon)
+cramp <- colorRampPalette(c("white","black"))
+ann_cols <- list(Group=c(Case="#BC0072",Control="#13C300"), True=cramp(10))
+sporder <- order(betweendat$igavalmeans)
+
+pheatmap(palmb[sporder,],annotation_row = rowannot,annotation_col=colannotb, main = "Palm", cluster_cols = F, annotation_colors = ann_cols, cluster_rows = F)
+pheatmap(kaub[sporder,],annotation_row = rowannot,annotation_col=colannotb, main ="Kau", cluster_cols = F, annotation_colors = ann_cols,cluster_rows = F)
+pheatmap(posprobb[sporder,],annotation_row = rowannot,annotation_col=colannotb, main="Positive Probability", cluster_cols = F, annotation_colors = ann_cols,cluster_rows = F)
+pheatmap(probratb[sporder,],annotation_row = rowannot, annotation_col=colannotb,main="Probability Ratio", cluster_cols = F, annotation_colors = ann_cols,cluster_rows = F)
+```
+
+## Between group comparisons
+
+```{r group_comp_fun}
+
+#function to do comparison between groups for a given score
+betgroup <- function(score,groups,name){
+  scorel <- score %>% rownames_to_column(var="Species") %>% gather("Sample","Score",-Species) %>% add_column(Group=factor(groups[match(.$Sample,names(groups))])) %>% 
+    mutate(Group=ifelse(Group==1,"Control","Case"), Species=str_replace(Species,"Species","")) %>% mutate(Species=factor(Species,levels=order(betweendat$igavalmeans)))
+  compp <- scorel %>% ggplot(aes(x=Species,y=Score))+geom_boxplot(aes(fill=Group))+scale_fill_manual(values=c("#BC0072","#13C300"))+ggtitle(name)+xlab("Species")
+  pvals <- scorel %>% nest(data=c(Sample,Score,Group)) %>% mutate(pval = map_dbl(data, ~wilcox.test(Score ~ Group, data = .)$p.value)) %>% select(-data)
+  pvals$pval <- p.adjust(pvals$pval, method = "fdr")
+  return(list(plot=compp,ps=pvals))
+}
+
+```
+
+```{r group_comp, fig.width=6, fig.height=4.5, include=T}
+pcomp <- betgroup(palmb,betweendat$expgroup,"Palm")
+pcomp$plot
+kable(pcomp$ps)
+
+kcomp <- betgroup(kaub,betweendat$expgroup,"Kau")
+kcomp$plot
+kable(kcomp$ps)
+
+probcomp <- betgroup(posprobb,betweendat$expgroup,"Positive Probability")
+probcomp$plot
+kable(probcomp$ps)
+
+probratcomp <- betgroup(probratb,betweendat$expgroup,"Probability Ratio")
+probratcomp$plot
+kable(probratcomp$ps)
+
+```
+
+
+## Correlation plots
+
+```{r cors_bet, include=T, fig.width=10, fig.height=11}
+plist <- list(corplotfun(palmb,betweendat$igavalmeans,"Palm"),corplotfun(kaub,betweendat$igavalmeans,"Kau"),corplotfun(posprobb,betweendat$igavalmeans,"Positive Probability"),corplotfun(probratb,betweendat$igavalmeans,"Probability Ratio"))
+
+plot_grid(plotlist = plist, align = "hv")
+```
+
