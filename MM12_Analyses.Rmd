@@ -33,9 +33,9 @@ theme_set(theme_pubclean())
 
 # Overview
 
-This script contains the analyses of IgA-Seq data from an experiment of a mouse model of colitis, using mice colonised with a defined community of 12 murine gut commensals. The experiment contained two groups, one administered IL10R antibody and the pathobiont *Helicobacter hepaticus* (n=8), which combined cause colitis, a second control group was soley administered the IL10R antibody (n=4). This provides a controlled envrionment to determine the effect of biological, disease related, changes on taxonomic specififty of IgA binding in the gut.
+This script contains the analyses of IgA-Seq data from an experiment of a mouse model of colitis, using mice colonised with a defined community of 12 murine gut commensals. The experiment contained two groups, one administered IL10R antibody and the pathobiont *Helicobacter hepaticus* (n=4), which combined cause colitis, a second control group was soley administered the IL10R antibody (n=4). This provides a controlled envrionment to determine the effect of biological, disease related, changes on taxonomic specififty of IgA binding in the gut.
 
-IgA-Seq measures the relative specifity of IgA binding to gut taxa by using FACS to sort highly IgA bound (IgA positive) and less IgA bound (IgA negative) fractions of stool bacteria. Previous indices used to estimate IgA binding have relied on basic ratios of relative abundances in these two fractions to determine specificity of IgA to different microbiota. However, this does do not account for starting abundances or the relative size of the IgA high and low fractions that are sequenced. The following analyses will use the data from the colitis model to compare these previous scores to a novel score I have developed based on Bayes' theroem, which can take these factors into account, and determine the effect this has on experimental results.
+IgA-Seq measures the relative specifity of IgA binding to gut taxa by using FACS to sort highly IgA bound (IgA positive) and less IgA bound (IgA negative) fractions of stool bacteria. Previous indices used to estimate IgA binding have relied on basic ratios of relative abundances in these two fractions to determine specificity of IgA to different microbiota. However, this does do not account for starting abundances or the relative size of the IgA high and low fractions that are sequenced. The following analyses will use the data from the colitis model to compare these previous scores to a novel score developed based on Bayes' theroem, which can take these factors into account, and determine the effect this has on experimental results.
 
 # Load data and filter low abundant taxa
 
@@ -115,13 +115,6 @@ abundplot <- function(atab){
 
 initialplot <- abundplot(abunds)
 
-#filter out the Hh samples that didn't get colonised
-abunds <- abunds[,-grep(c("CM1|CM2|CM3|CM4"),colnames(abunds))]
-#generate filtered meta
-meta <- meta %>% filter(SampleID%in%colnames(abunds))
-
-hhrem <- abundplot(abunds)
-
 #plot to assess a suitable low abundance cutoff
 testcuts <- c(1e-5,1e-4,1e-3,1e-2,1e-1)
 ntax <- c()
@@ -145,6 +138,9 @@ ab <- threshdf %>% ggplot(aes(x=Threshold,y=abun))+geom_point()+geom_line()+scal
 crt <- threshdf %>% ggplot(aes(x=Threshold,y=contamrat))+geom_point()+geom_line()+scale_x_log10()+ylab("Ratio Unexpected/Expected Taxa")
 tplot <- plot_grid(tx,ab,crt,nrow=1)
 
+#remove the control from meta
+meta <- meta[-which(meta$SampleID=="NegCtrlQiagen"),]
+
 #generate screened table (seting taxa below 1e-3 to zero and removing rare observations) - this cut-off is taken from looking at the previous plot
 screena <- abunds
 screena[screena<cutthresh] <- 0
@@ -165,19 +161,13 @@ screenedplot <- abundplot(screena)
 plot(initialplot)
 ```
 
-On this plot it is clear that there is more noise in the IgA fractions (with lower biomass and sorted). For instance, even samples that were expected not to have *Helicobacter* have a few counts. However, these are at the same low levels as the other contaminants. We expect some level of barcode switching in the sequencing and there is potential for low-level cross contamination after DNA has been extracted. In the *H.hepaticus* colonised samples the levels are much higher and consistent across the different IgA fractions, however it does appear that one cage of the *Hepaticus* gavaged mice did not get colonised properly so these will be excluded from later analyses - making a 4 vs 4 comparison. 
-
-```{r remplot, include=T, fig.width=10, fig.height=12}
-plot(hhrem)
-```
-
-The above plot shows samples retained for analysis prior to abundance cut-off screening.
+On this plot it is clear that there is more noise in the IgA fractions (with lower biomass and sorted). For instance, even samples that were expected not to have *Helicobacter* have a few counts. However, these are at the same low levels as the other contaminants. We expect some level of barcode switching in the sequencing and there is potential for low-level cross contamination after DNA has been extracted. In the *H.hepaticus* colonised samples the levels are much higher and consistent across the different IgA fractions.
 
 ```{r threshplot, include=T, fig.width=10, fig.height=4}
 plot(tplot)
 ```
 
-As can be seen in the previous two plots, across all the samples, an abundance cut-off of 1e-3 provides a reasonabel filtering of low abundance contaminants whilst retaining the majority of abundance. Additionally only taxa observed in the pre-sort sample will be retained in the IgA+ and IgA- fractions to account for contaminants introduced by sorting. A plot showing the cleaned samples after this filtering is shown below:
+As can be seen in the previous plots, across all the samples, an abundance cut-off of 1e-3 provides a reasonable filtering of low abundance contaminants whilst retaining the majority of abundance. Additionally only taxa observed in the pre-sort sample will be retained in the IgA+ and IgA- fractions to account for contaminants introduced by sorting. A plot showing the cleaned samples after this filtering is shown below:
 
 ```{r filtplot,include=T, fig.width=10, fig.height=12}
 plot(screenedplot)

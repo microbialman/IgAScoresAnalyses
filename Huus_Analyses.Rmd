@@ -2,14 +2,14 @@
 title: "Applying Probability-Ratio to Published Data"
 author: "Matthew Jackson"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 editor_options:
   chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, include = F, message=F, warning=F, echo=F)
+knitr::opts_chunk$set(echo = TRUE, include = F, message=F, warning=F, echo=F, scipen=999)
 library(here)
 library(IgAScores)
 library(tidyverse)
@@ -18,6 +18,11 @@ library(ggsci)
 library(pheatmap)
 library(cowplot)
 library(knitr)
+library(broom)
+library(phyloseq)
+library(data.table)
+library(phenoDist)
+
 
 theme_set(theme_pubclean())
 
@@ -25,6 +30,186 @@ theme_set(theme_pubclean())
 
 # Overview
 
-The aim of this script is to apply the Probability Ratio to a published dataset. Huus et al. applied the Kau ratio to study binding of bacteria by IgA in under noursihed mice relative to controls, finding they do not develop IgA binding of Lactobacillus in the under nourished state but do conventionally. Here, we carry out a reanalysis of a subset of these data kindly provided by the authors.
+The aim of this script is to apply the Probability Ratio to a published dataset. Huus et al. applied the Kau ratio to study binding of bacteria by IgA in under nourished mice relative to controls, finding they do not develop IgA binding of Lactobacillus in the under nourished state but do conventionally. Here, we carry out a reanalysis of a subset of these data kindly provided by the authors.
 
+# Load in the data
+
+```{r load_abunds}
+#following code taken from Huus paper
+parse_taxonomy_simple = function(char.vec) {
+  ranks = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+  rv = strsplit(char.vec, ";")[[1]]
+  rv = c(rv, rep(NA, length(ranks) - length(rv)))
+  names(rv) = ranks
+  rv
+}
+#import data
+Table = import_qiime(otufilename = here("Huus_Data","feature-table-for-R-2.txt"), mapfilename = here("Huus_Data","sample-metadata.txt"), parseFunction = parse_taxonomy_simple)
+
+#Remove halomonas and shewanella #and others
+taxotu <- data.frame(OTU = row.names(otu_table(Table)), tax_table(Table))
+halotus <- subset(taxotu, Domain == "Archaea"  | Genus == "Halomonas" | Genus == "Shewanella" | Family == "mitochondria" | Class == "chloroplast")
+halotus <- as.character(halotus[["OTU"]])
+Table <- prune_taxa(setdiff(row.names(otu_table(Table)), halotus), Table)
+
+#remove singletons
+Table <- prune_taxa(taxa_sums(Table) > 0, Table)
+
+#prune taxa with a very low fractional abundance, ie 0.005% out of total taxa
+number <- taxa_sums(Table)/sum(taxa_sums(Table))
+Igf <- prune_taxa(number > 0.00005, Table)
+
+
+```
+
+```{r data_prep}
+#load in the metadata, remove EE to keep balanced design
+meta <- read_delim(here("Huus_Data","sample-metadata.txt"),"\t") %>% rename("samplename"=1) %>% filter(!Diet=="EE")
+
+#convert the filtered OTU table from above to relative abundances and get the colnames back to match meta
+rawabunds <- read_delim(here("Huus_Data","feature-table-for-R-2.txt"),"\t",comment = "# Constructed") %>% select(-c(1,247))
+abunds <- relabund(data.frame(otu_table(Igf)))
+colnames(abunds) <- colnames(rawabunds)
+abunds <- abunds %>% select(which(colnames(abunds)%in%meta$samplename))
+
+#subset meta to just those with sequencing and remove the EE condition to simplify comparisons
+meta <- meta %>% slice(match(colnames(abunds),meta$samplename))
+
+#seperate out the postive and negative and presort abundances
+posabunds <- abunds %>% select(which(meta$Sort=="IgApos")) 
+negabunds <- abunds %>% select(which(meta$Sort=="IgAneg"))
+preabunds <- abunds %>% select(which(meta$Sort=="Pre"))
+
+#convert the per-fraction ids to uniform sample names
+sampname <- function(curnames){
+  newnames <- gsub("-[A-z]*$","",curnames)
+  return(newnames)
+}
+colnames(posabunds) <- sampname(colnames(posabunds))
+colnames(negabunds) <- sampname(colnames(negabunds))
+colnames(preabunds) <- sampname(colnames(preabunds))
+
+#load in the pos and neg %s converting to sum to 1 and getting the sample name as above
+fracsizes <- read_delim(here("Huus_Data","Table2-IgAposANDneg-cleaned.csv"),",") %>% rename("posper"=2,"negper"=3,"name"=4) %>% mutate(posper=posper/100,negper=negper/100) %>% add_column("sample"=sampname(.$name)) %>% filter(.$name%in%meta$samplename)
+
+#get the list of samplenames with pos and neg abundances and fraction sizes
+samps <- fracsizes$sample[which(fracsizes$sample%in%colnames(posabunds)&fracsizes$sample%in%colnames(negabunds))]
+
+#subset all the tables to these samples and generate a meta table on the sample (not fraction) level
+posabunds <- posabunds[,samps]
+negabunds <- negabunds[,samps]
+preabunds <- preabunds[,samps]
+
+fracsizes <- fracsizes[match(samps,fracsizes$sample),]
+possizes <- fracsizes$posper
+names(possizes) <- fracsizes$sample
+negsizes <- fracsizes$negper
+names(negsizes) <- fracsizes$sample
+sampmeta <- meta %>% add_column(sample=sampname(.$samplename)) %>% filter(Sort=="IgAneg") %>% slice(match(samps,.$sample)) %>%
+  add_column(mouse=gsub("[0-9]*-[0-9]*","",.$sample)) %>% mutate(Age=as.numeric(gsub("Week","",.$Age)))
+
+```
+
+The dataset contained pre-sort, postive, and negative fraction sequencing for **`r {nrow(sampmeta)}`** samples. The experimental conditions are broken down as below, where week relates the age of the mouse in terms of the experimental time and diet the experimental condition (conventional or malnourished diet). All samples were longitudinally sampled from the same mice from faecal pellets.
+
+```{r tab, include=T}
+kable(table(sampmeta$Age,sampmeta$Diet))
+
+lowest <- min(min(posabunds[posabunds!=0]),min(negabunds[negabunds!=0]))
+pseudo <- 5e-5
+```
+
+Filtering aiming to match that described in the paper led to retention of **`r nrow(posabunds)`** species features. The lowest observed abundance was **`r format(lowest, scientific=F)`** , so a pseudo count of **`r format(pseudo, scientific=F)`** will be used.
+
+# Generate the Kau and Probability Ratio scores
+
+```{r}
+#generate a suitable pseudo counts
+kau <- igascores(posabunds = posabunds, negabunds=negabunds, pseudo = pseudo, method="kau")
+colnames(kau) <- colnames(posabunds)
+probrat <- igascores(posabunds = posabunds, negabunds = negabunds, possizes = possizes, negsizes = negsizes, pseudo = pseudo, method="probratio")
+colnames(probrat) <-  colnames(posabunds)
+```
+
+# Identifying taxa with differential IgA binding between conditions
+
+As I am working with a limited subset of the previous data, I will focus on the intergroup comparisons and model age as continuous variable to increase power. A two-way ANOVA will be used modelling the effect of age, diet, and the interaction of age and diet on IgA binding of each taxon. This will be carried out using both the Kau index and the Probability Ratio.
+
+```{r}
+#function to calculate smd with check for all zeros
+ssmdfun <- function(v1,v2){
+  comb <- c(v1,v2)
+  if(length(which(comb!=0))>0){
+    return(ssmd(v1,v2))
+  }
+  else{
+    return(NA)
+  }
+}
+
+#function to carry out anova and find any significance
+igafun <- function(scores,met){
+  #carry out the staistical test
+  scores <- as.numeric(scores)
+  an <- aov(scores~met$Age*met$Diet) %>% tidy()
+  ps <- an$p.value[c(2,3)]
+  res <- c(ps,ifelse(min(ps)<0.05,1,0))
+  names(res) <- c("Diet","Age:Diet","Any_Sig")
+  w3 <- NA
+  w5 <- NA
+  w7 <- NA
+  if(!is.na(res["Any_Sig"])&res["Any_Sig"]==1){
+  #generate normalised differences in MAL relative to CON at each time point
+  w3 <- ssmdfun(scores[met$Age_Diet=="Week3MAL"],scores[met$Age_Diet=="Week3CON"])
+  w5 <- ssmdfun(scores[met$Age_Diet=="Week5MAL"],scores[met$Age_Diet=="Week5CON"])
+  w7 <- ssmdfun(scores[met$Age_Diet=="Week7MAL"],scores[met$Age_Diet=="Week7CON"])}
+  res <- c(res,"W3"=w3,"W5"=w5,"W7"=w7)
+  return(res)
+}
+
+kres <- unlist(apply(kau,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon") %>% filter(Any_Sig==1)
+cprres <- unlist(apply(probrat,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon") %>% filter(Any_Sig==1)
+
+#function to plot significant hits
+sigplot <- function(sigres,scores,met,name){
+  #first plot of the standardised mean differences
+  longdifs <- sigres %>% select("taxon","W3","W5","W7") %>% gather("Time","Score",-taxon) %>% mutate(taxon=gsub("([A-z]*;){4}","",taxon))
+  meandifs <- longdifs %>% ggplot(aes(x=Time,y=Score,fill=taxon))+geom_col()+facet_wrap(.~taxon)+guides(fill=F)+ylab(paste0("Standardised Mean Difference ",name," MAL/CON"))
+  #plot the actual scores
+  scores <- scores[sigres$taxon,]
+  longscores <- scores %>% rownames_to_column("taxon") %>% gather("Sample","Score",-taxon) %>%
+    add_column(Time=met$Age[match(.$Sample,met$sample)],Diet=met$Diet[match(.$Sample,met$sample)], Mouse=met$mouse[match(.$Sample,met$sample)]) %>%
+    mutate(taxon=gsub("([A-z]*;){4}","",taxon))
+  longscores <- longscores %>% ggplot(aes(x=Time,y=Score,col=Diet))+geom_point()+geom_line(aes(group=Mouse))+facet_wrap(.~taxon,scales="free")+ylab(name)
+  return(list(mdifs=meandifs,ldifs=longscores))
+}
+
+```
+
+# Kau
+
+```{r include=T, fig.width=10, fig.height=10}
+kable(kres)
+
+kps <- sigplot(kres,kau,sampmeta,"Kau")
+
+kps$mdifs
+
+kps$ldifs
+
+```
+
+# Probability-ratio
+
+```{r include=T, fig.width=10, fig.height=10}
+kable(cprres)
+
+prps <- sigplot(cprres,probrat,sampmeta,"Probability Ratio")
+
+prps$mdifs
+
+prps$ldifs
+
+
+```
 
