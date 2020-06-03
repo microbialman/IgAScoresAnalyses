@@ -2,8 +2,8 @@
 title: "Applying Probability-Ratio to Published Data"
 author: "Matthew Jackson"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 editor_options:
   chunk_output_type: inline
 ---
@@ -22,7 +22,8 @@ library(broom)
 library(phyloseq)
 library(data.table)
 library(phenoDist)
-
+library(ggrepel)
+library(ggbeeswarm)
 
 theme_set(theme_pubclean())
 
@@ -34,7 +35,7 @@ The aim of this script is to apply the Probability Ratio to a published dataset.
 
 # Load in the data
 
-```{r load_abunds}
+```{r load_abunds_paper_code}
 #following code taken from Huus paper
 parse_taxonomy_simple = function(char.vec) {
   ranks = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
@@ -105,12 +106,11 @@ possizes <- fracsizes$posper
 names(possizes) <- fracsizes$sample
 negsizes <- fracsizes$negper
 names(negsizes) <- fracsizes$sample
-sampmeta <- meta %>% add_column(sample=sampname(.$samplename)) %>% filter(Sort=="IgAneg") %>% slice(match(samps,.$sample)) %>%
-  add_column(mouse=gsub("[0-9]*-[0-9]*","",.$sample)) %>% mutate(Age=as.numeric(gsub("Week","",.$Age)))
+sampmeta <- meta %>% add_column(sample=sampname(.$samplename)) %>% filter(Sort=="IgAneg") %>% slice(match(samps,.$sample)) %>% mutate(Age=as.numeric(gsub("Week","",.$Age)))
 
 ```
 
-The dataset contained pre-sort, postive, and negative fraction sequencing for **`r {nrow(sampmeta)}`** samples. The experimental conditions are broken down as below, where week relates the age of the mouse in terms of the experimental time and diet the experimental condition (conventional or malnourished diet). All samples were longitudinally sampled from the same mice from faecal pellets.
+The dataset contained pre-sort, postive, and negative fraction sequencing for **`r {nrow(sampmeta)}`** samples. The experimental conditions are broken down as below, where week relates the age of the mouse in terms of the experimental time and diet the experimental condition (conventional or malnourished diet). All samples were from faecal pellets.
 
 ```{r tab, include=T}
 kable(table(sampmeta$Age,sampmeta$Diet))
@@ -158,42 +158,48 @@ igafun <- function(scores,met){
   w3 <- NA
   w5 <- NA
   w7 <- NA
-  if(!is.na(res["Any_Sig"])&res["Any_Sig"]==1){
   #generate normalised differences in MAL relative to CON at each time point
   w3 <- ssmdfun(scores[met$Age_Diet=="Week3MAL"],scores[met$Age_Diet=="Week3CON"])
   w5 <- ssmdfun(scores[met$Age_Diet=="Week5MAL"],scores[met$Age_Diet=="Week5CON"])
-  w7 <- ssmdfun(scores[met$Age_Diet=="Week7MAL"],scores[met$Age_Diet=="Week7CON"])}
+  w7 <- ssmdfun(scores[met$Age_Diet=="Week7MAL"],scores[met$Age_Diet=="Week7CON"])
   res <- c(res,"W3"=w3,"W5"=w5,"W7"=w7)
   return(res)
 }
 
-kres <- unlist(apply(kau,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon") %>% filter(Any_Sig==1)
-cprres <- unlist(apply(probrat,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon") %>% filter(Any_Sig==1)
+kresall <- unlist(apply(kau,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon") 
+kres <- kresall %>% filter(Any_Sig==1)
+prresall <- unlist(apply(probrat,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon")
+prres <- prresall %>% filter(Any_Sig==1)
 
 #function to plot significant hits
 sigplot <- function(sigres,scores,met,name){
   #first plot of the standardised mean differences
-  longdifs <- sigres %>% select("taxon","W3","W5","W7") %>% gather("Time","Score",-taxon) %>% mutate(taxon=gsub("([A-z]*;){4}","",taxon))
-  meandifs <- longdifs %>% ggplot(aes(x=Time,y=Score,fill=taxon))+geom_col()+facet_wrap(.~taxon)+guides(fill=F)+ylab(paste0("Standardised Mean Difference ",name," MAL/CON"))
+  longdifs <- sigres %>% select("taxon","W3","W5","W7") %>% gather("Time","Score",-taxon) %>% mutate(taxon=gsub("^([A-z_]*;){4}","",taxon))
+  meandifs <- longdifs %>% ggplot(aes(x=Time,y=Score,fill=taxon))+geom_col()+facet_wrap(.~taxon)+guides(fill=F)+ylab(paste0("Standardised Mean Difference ",name," MAL/CON"))+scale_fill_d3()
   #plot the actual scores
   scores <- scores[sigres$taxon,]
   longscores <- scores %>% rownames_to_column("taxon") %>% gather("Sample","Score",-taxon) %>%
-    add_column(Time=met$Age[match(.$Sample,met$sample)],Diet=met$Diet[match(.$Sample,met$sample)], Mouse=met$mouse[match(.$Sample,met$sample)]) %>%
-    mutate(taxon=gsub("([A-z]*;){4}","",taxon))
-  longscores <- longscores %>% ggplot(aes(x=Time,y=Score,col=Diet))+geom_point()+geom_line(aes(group=Mouse))+facet_wrap(.~taxon,scales="free")+ylab(name)
-  return(list(mdifs=meandifs,ldifs=longscores))
+    add_column(Time=met$Age[match(.$Sample,met$sample)],Diet=met$Diet[match(.$Sample,met$sample)]) %>%
+    mutate(taxon=gsub("^([A-z_]*;){4}","",taxon))
+  ldifs <- longscores %>% ggplot(aes(x=factor(Time),y=Score,fill=Diet))+geom_boxplot(outlier.shape = NA)+geom_point(aes(fill=Diet),position =position_dodge(width = 0.75),shape=21)+facet_wrap(.~taxon,scales="free")+ylab(name)+
+    xlab("Age (Weeks)")+scale_fill_simpsons()
+  return(list(mdifs=meandifs,ldifs=ldifs))
 }
 
 ```
 
 # Kau
 
-```{r include=T, fig.width=10, fig.height=10}
+```{r include=T, fig.width=10, fig.height=8}
 kable(kres)
 
 kps <- sigplot(kres,kau,sampmeta,"Kau")
 
 kps$mdifs
+```
+
+
+```{r include=T, fig.width=10, fig.height=8}
 
 kps$ldifs
 
@@ -201,15 +207,60 @@ kps$ldifs
 
 # Probability-ratio
 
-```{r include=T, fig.width=10, fig.height=10}
-kable(cprres)
+```{r include=T, fig.width=10, fig.height=8}
+kable(prres)
 
-prps <- sigplot(cprres,probrat,sampmeta,"Probability Ratio")
+prps <- sigplot(prres,probrat,sampmeta,"Probability Ratio")
 
 prps$mdifs
+```
+
+```{r include=T, fig.width=10, fig.height=8}
 
 prps$ldifs
 
+```
+
+# Comparison of effect sizes and p-values of significant associations between scoring methods
+
+These plots compare the p-values for any comparison of diet or age*diet that is significant in either scoring method. Additionally, the difference in mean score between groups at all three time points is plotted for each of these comparisons.
+
+```{r p_vs_eff, fig.width=10, fig.height=5, include=T}
+#generate long format of all comparisons made between groups (age, diet, age*diet) and the effect sizes at each time point for each one
+kreslong <- kresall %>% select(-Any_Sig) %>% gather("Comparison","P",-taxon,-W3,-W5,-W7) %>% gather("Week","EffectSize",-Comparison,-P,-taxon)
+prlong <- prresall %>% select(-Any_Sig) %>% gather("Comparison","P",-taxon,-W3,-W5,-W7) %>% gather("Week","EffectSize",-Comparison,-P,-taxon)
+colnames(kreslong) <- paste0("Kau_",colnames(kreslong))
+colnames(prlong) <- paste0("PR_",colnames(prlong))
+#plot
+comb <- cbind(kreslong,prlong)
+sigcomb <- comb %>% filter(PR_P<0.05|Kau_P<0.05) 
+sigpplot <- sigcomb %>% ggplot(aes(y=PR_P,x=Kau_P))+geom_point()+geom_abline(slope=1,lty=2,col="red")+scale_y_continuous(limits=c(0,0.087))+scale_x_continuous(limits=c(0,0.087))+xlab("Kau Index p-value")+ylab("Probability Ratio p-value")
+sigeffplot <- sigcomb %>% ggplot(aes(y=abs(PR_EffectSize),x=abs(Kau_EffectSize)))+geom_point()+geom_abline(slope=1,lty=2,col="red")+scale_y_continuous(limits=c(0,10.6))+scale_x_continuous(limits=c(0,10.6))+xlab("Absolute Kau Effect Size\n(SSMD MAL/CON)")+ylab("Absolute Probability Ratio\nEffect Size (SSMD MAL/CON)")
+
+peff <- plot_grid(sigpplot,sigeffplot,nrow=1,align = "hv",rel_widths = c(0.9,1))
+
+peff
 
 ```
+
+# Comparing within group variation between the scores
+
+The Probability Ratio appears more powered to detect differences (lower p-values and higher mean differences). This plot will look at the coefficient of variation within each taxa and each experimental group (age*diet) to see if this is due to reduced variance in score estimates in the Probability Ratio, as seen in the simulations.
+
+```{r cov, fig.width=8, fig.height=8, include=T}
+cv <- function(vals){
+  return(sd(vals)/mean(vals))
+}
+
+kaucv <- kau %>% rownames_to_column("Taxon") %>% gather("Sample","Score",-Taxon) %>% add_column(Group=sampmeta$Age_Diet[match(.$Sample,sampmeta$sample)]) %>% group_by(Taxon,Group) %>% summarise(CV=cv(Score))
+prcv <- probrat %>% rownames_to_column("Taxon") %>% gather("Sample","Score",-Taxon) %>% add_column(Group=sampmeta$Age_Diet[match(.$Sample,sampmeta$sample)]) %>% group_by(Taxon,Group) %>% summarise(CV=cv(Score))
+
+cvs <- tibble(Group=kaucv$Group,Kau_CV=kaucv$CV,PR_CV=prcv$CV) %>% filter(!is.na(Kau_CV)&!is.na(PR_CV)) %>% mutate(Kau_CV=abs(Kau_CV),PR_CV=abs(PR_CV)) %>% gather("Method","CV",-Group) %>% mutate(Method=ifelse(Method=="Kau_CV","Kau Index","Probability Ratio"))
+cvs %>% ggplot(aes(x=Method,y=CV))+geom_quasirandom(alpha=0.5,aes(col=Group))+geom_boxplot(outlier.shape=NA,fill=NA)+scale_y_log10()+stat_compare_means(method = "wilcox", comparisons = list(c(1,2)))+scale_color_d3()+
+  theme(legend.position = "right",legend.direction = "vertical")
+```
+
+
+
+
 

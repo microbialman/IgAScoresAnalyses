@@ -193,7 +193,7 @@ fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction))+
 
 ```{r,  include=T, fig.width=4, fig.height=2.85}
 #without pvalues
-fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction))+scale_fill_d3()+theme(axis.title.x = element_blank())+ylab("Size (% Bacteria)")+facet_wrap(.~Fraction,scales ="free")+
+fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction),outlier.shape = NA)+geom_point()+scale_fill_d3()+theme(axis.title.x = element_blank())+ylab("Size (% Bacteria)")+facet_wrap(.~Fraction,scales ="free")+
   guides(fill=F)
 ```
 
