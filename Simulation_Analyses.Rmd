@@ -19,7 +19,7 @@ library(pheatmap)
 library(cowplot)
 library(knitr)
 
-theme_set(theme_pubclean())
+theme_set(theme_pubr())
 
 ```
 
@@ -47,7 +47,7 @@ The high and low cut-offs used to define the IgA postive and negative gates are 
 ```{r density_plot, include=T, fig.width=8, fig.height=4}
 speclevs <- paste0("Species",c(1:length(levels(igabinding$Species))))
 igabinding$Species <- factor(igabinding$Species,levels=speclevs)
-igabinding %>% ggplot(aes(x=IgAValue,color=Species))+geom_density()+geom_vline(xintercept = c(posthresh,negthresh),lty=2,col=c("darkgrey"))+scale_color_d3()+ylab("Density")+xlab("IgA Value")
+igabinding %>% ggplot(aes(x=IgAValue,color=Species))+geom_density()+geom_vline(xintercept = c(posthresh,negthresh),lty=2,col=c("darkgrey"))+scale_color_d3()+ylab("Density")+xlab("IgA Value")+theme(axis.text = element_text(size=15))
 
 ```
 
@@ -64,7 +64,7 @@ posl <- posabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abu
 negl <- negabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Neg",nrow(.)))
 combinedl <- rbind(wholel,posl,negl) %>% mutate(Sample=factor(Sample,levels=colnames(wholeabunds)), Species=factor(Species,levels=speclevs),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg")))
 
-combinedl %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(.~Fraction)+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())
+combinedl %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(.~Fraction)+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())+theme(axis.text = element_text(size=10),legend.text = element_text(size=15))
 
 ```
 
@@ -74,7 +74,8 @@ combinedl %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_gr
 
 fracsizes <- data.frame(Fraction=c(rep("Pos",length(possizes)),rep("Neg",length(negsizes))),Size=c(possizes,negsizes),Sample=rep(names(possizes),2)) %>% mutate(Sample=str_replace(Sample,"Sample","")) %>% mutate(Sample=factor(Sample,levels=c(1:ncol(wholeabunds))))
 
-fracsizes %>% ggplot(aes(x=Sample,y=Size*100,fill=Fraction))+geom_col(position = "dodge")+scale_fill_d3()+xlab("Sample")+ylab("Size (% Bacteria)")
+fracsizes %>% ggplot(aes(x=Sample,y=Size*100,fill=Fraction))+geom_col(position = "dodge")+scale_fill_d3()+xlab("Sample")+ylab("Size (% Bacteria)")+
+  theme(axis.text.y=element_text(size=14))
 ```
 
 
@@ -121,9 +122,9 @@ getcov <- function(tab,name){
   return(data.frame(CV=abs(covs),Score=names,Species=rownames(tab)))
 }
 #generate for each score and compare across
-cvs <- rbind(getcov(palm,"Palm"),getcov(kau,"Kau"),getcov(posprob,"Positive Probability"),getcov(probrat,"Probability Ratio"))
+cvs <- rbind(getcov(palm,"Palm"),getcov(kau,"Kau"),getcov(posprob,"Positive\nProbability"),getcov(probrat,"Probability\nRatio"))
 cvs$Species <- factor(cvs$Species,levels=speclevs)
-cvs %>% ggplot(aes(y=CV, x=Score))+geom_boxplot()+geom_point(aes(color=Species))+scale_y_log10()+scale_color_d3()+ylab("Coefficient of Variance")+guides(color=F)
+cvs %>% ggplot(aes(y=CV, x=Score))+geom_boxplot()+geom_point(aes(color=Species))+scale_y_log10()+scale_color_d3()+ylab("Coefficient of Variance")+guides(color=F)+theme(axis.text.y=element_text(size=14))
 
 cvs %>% compare_means(data=.,CV~Score) %>% kable
 
@@ -136,7 +137,8 @@ corplotfun <- function(tab,meanvals,title){
   scores <- gather(data.frame(t(tab)))
   scores$true <- meanvals[scores$key] 
   df <- data.frame(Scores=scores$value,True=scores$true,Species=scores$key)
-  p <- ggplot(df,aes(y=True,x=Scores))+geom_point(aes(col=Species))+xlab("Species Mean IgA Value")+ggtitle(title)+stat_cor(method="spearman",label.y = 0,cor.coef.name="rho")+stat_cor(method="pearson",label.y =-0.25)+scale_color_d3()+guides(col=F)+theme_classic()+ylab("True IgA Value")+xlab("Score Value")
+  p <- ggplot(df,aes(y=True,x=Scores))+geom_point(aes(col=Species))+xlab("Species Mean IgA Value")+ggtitle(title)+stat_cor(method="spearman",label.y = 0.2,cor.coef.name="rho",size=5)+stat_cor(method="pearson",label.y =-0.25,size=5)+scale_color_d3()+guides(col=F)+ylab("True IgA Value")+
+    xlab("Score Value")+theme(axis.text=element_text(size=12))
   return(p)
 }
 
@@ -173,7 +175,7 @@ poslb <- betweendat$posabunds %>% rownames_to_column(var="Species") %>% gather("
 neglb <- betweendat$negabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Neg",nrow(.)))
 combinedlb <- rbind(wholelb,poslb,neglb) %>% mutate(Sample=factor(Sample,levels=colnames(betweendat$wholeabunds)),Species=factor(Species,levels=rownames(betweendat$wholeabunds)),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg"))) %>% add_column(Group=ifelse(betweendat$expgroup[.$Sample]=="1","Control","Case"))
 
-combinedlb %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(Group~Fraction,scales="free")+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())
+combinedlb %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(Group~Fraction,scales="free")+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())+theme(axis.text = element_text(size=10),legend.text = element_text(size=15))
 
 ```
 
@@ -194,7 +196,7 @@ fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction))+
 ```{r,  include=T, fig.width=4, fig.height=2.85}
 #without pvalues
 fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction),outlier.shape = NA)+geom_point()+scale_fill_d3()+theme(axis.title.x = element_blank())+ylab("Size (% Bacteria)")+facet_wrap(.~Fraction,scales ="free")+
-  guides(fill=F)
+  guides(fill=F)+theme(axis.text = element_text(size=14))
 ```
 
 
@@ -237,7 +239,7 @@ pheatmap(probratb[sporder,],annotation_row = rowannot, annotation_col=colannotb,
 betgroup <- function(score,groups,name){
   scorel <- score %>% rownames_to_column(var="Species") %>% gather("Sample","Score",-Species) %>% add_column(Group=factor(groups[match(.$Sample,names(groups))])) %>% 
     mutate(Group=ifelse(Group==1,"Control","Case"), Species=str_replace(Species,"Species","")) %>% mutate(Species=factor(Species,levels=order(betweendat$igavalmeans)))
-  compp <- scorel %>% ggplot(aes(x=Species,y=Score))+geom_boxplot(aes(fill=Group))+scale_fill_manual(values=c("#BC0072","#13C300"))+ggtitle(name)+xlab("Species")
+  compp <- scorel %>% ggplot(aes(x=Species,y=Score))+geom_boxplot(aes(fill=Group))+scale_fill_manual(values=c("#BC0072","#13C300"))+ggtitle(name)+xlab("Species")+theme(axis.text = element_text(size=15))
   pvals <- scorel %>% nest(data=c(Sample,Score,Group)) %>% mutate(pval = map_dbl(data, ~wilcox.test(Score ~ Group, data = .)$p.value)) %>% select(-data)
   pvals$pval <- p.adjust(pvals$pval, method = "fdr")
   return(list(plot=compp,ps=pvals))

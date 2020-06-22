@@ -25,7 +25,7 @@ library(phenoDist)
 library(ggrepel)
 library(ggbeeswarm)
 
-theme_set(theme_pubclean())
+theme_set(theme_pubr())
 
 ```
 
@@ -133,11 +133,14 @@ colnames(probrat) <-  colnames(posabunds)
 
 # Identifying taxa with differential IgA binding between conditions
 
-As I am working with a limited subset of the previous data, I will focus on the intergroup comparisons and model age as continuous variable to increase power. A two-way ANOVA will be used modelling the effect of age, diet, and the interaction of age and diet on IgA binding of each taxon. This will be carried out using both the Kau index and the Probability Ratio.
+As I am working with a limited subset of the previous data, I will focus on the intergroup comparisons and model age as continuous variable to increase power. A two-way ANOVA will be used modelling the effect of age, diet, and the interaction of age and diet on IgA binding of each taxon. This will be carried out using both the Kau index and the Probability Ratio. Significant cut-off is permissive (nominal p<0.05) given the small sample sizes (max 4 per group).
 
 ```{r}
 #function to calculate smd with check for all zeros
 ssmdfun <- function(v1,v2){
+  if(length(v1)<2|length(v2)<2){
+    return(NA)
+  }
   comb <- c(v1,v2)
   if(length(which(comb!=0))>0){
     return(ssmd(v1,v2))
@@ -148,39 +151,51 @@ ssmdfun <- function(v1,v2){
 }
 
 #function to carry out anova and find any significance
-igafun <- function(scores,met){
-  #carry out the staistical test
+igafun <- function(scores,met,thresh){
   scores <- as.numeric(scores)
-  an <- aov(scores~met$Age*met$Diet) %>% tidy()
-  ps <- an$p.value[c(2,3)]
-  res <- c(ps,ifelse(min(ps)<0.05,1,0))
+  #carry out the staistical test if enough non na points (at least one sample in each diet and each age, min of 6 total samples)
+  if(length(which(is.na(scores)))>0){
+    met <- met[-which(is.na(scores)),]
+    scores <- scores[-which(is.na(scores))]
+  }
+  res <- c(NA,NA,NA)
   names(res) <- c("Diet","Age:Diet","Any_Sig")
   w3 <- NA
   w5 <- NA
   w7 <- NA
+  if(nrow(met)>6){
+    if(all(dim(table(met$Age,met$Diet))==c(3,2))){
+  an <- aov(scores~met$Age*met$Diet) %>% tidy()
+  ps <- an$p.value[c(2,3)]
+  res <- c(ps,ifelse(min(ps)<thresh,1,0))
+  names(res) <- c("Diet","Age:Diet","Any_Sig")
   #generate normalised differences in MAL relative to CON at each time point
   w3 <- ssmdfun(scores[met$Age_Diet=="Week3MAL"],scores[met$Age_Diet=="Week3CON"])
   w5 <- ssmdfun(scores[met$Age_Diet=="Week5MAL"],scores[met$Age_Diet=="Week5CON"])
   w7 <- ssmdfun(scores[met$Age_Diet=="Week7MAL"],scores[met$Age_Diet=="Week7CON"])
+  }
+  }
   res <- c(res,"W3"=w3,"W5"=w5,"W7"=w7)
   return(res)
 }
 
-kresall <- unlist(apply(kau,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon") 
+thresh=0.05
+
+kresall <- unlist(apply(kau,1,igafun,met=sampmeta,thresh=thresh)) %>% t() %>% data.frame() %>% rownames_to_column("taxon") 
 kres <- kresall %>% filter(Any_Sig==1)
-prresall <- unlist(apply(probrat,1,igafun,met=sampmeta)) %>% t() %>% data.frame() %>% rownames_to_column("taxon")
+prresall <- unlist(apply(probrat,1,igafun,met=sampmeta,thresh=thresh)) %>% t() %>% data.frame() %>% rownames_to_column("taxon")
 prres <- prresall %>% filter(Any_Sig==1)
 
 #function to plot significant hits
 sigplot <- function(sigres,scores,met,name){
   #first plot of the standardised mean differences
-  longdifs <- sigres %>% select("taxon","W3","W5","W7") %>% gather("Time","Score",-taxon) %>% mutate(taxon=gsub("^([A-z_]*;){4}","",taxon))
+  longdifs <- sigres %>% select("taxon","W3","W5","W7") %>% gather("Time","Score",-taxon) %>% mutate(taxon=gsub("^([A-z_]*;){3}","",taxon))
   meandifs <- longdifs %>% ggplot(aes(x=Time,y=Score,fill=taxon))+geom_col()+facet_wrap(.~taxon)+guides(fill=F)+ylab(paste0("Standardised Mean Difference ",name," MAL/CON"))+scale_fill_d3()
   #plot the actual scores
   scores <- scores[sigres$taxon,]
   longscores <- scores %>% rownames_to_column("taxon") %>% gather("Sample","Score",-taxon) %>%
     add_column(Time=met$Age[match(.$Sample,met$sample)],Diet=met$Diet[match(.$Sample,met$sample)]) %>%
-    mutate(taxon=gsub("^([A-z_]*;){4}","",taxon))
+    mutate(taxon=gsub("^([A-z_]*;){3}","",taxon))
   ldifs <- longscores %>% ggplot(aes(x=factor(Time),y=Score,fill=Diet))+geom_boxplot(outlier.shape = NA)+geom_point(aes(fill=Diet),position =position_dodge(width = 0.75),shape=21)+facet_wrap(.~taxon,scales="free")+ylab(name)+
     xlab("Age (Weeks)")+scale_fill_simpsons()
   return(list(mdifs=meandifs,ldifs=ldifs))
@@ -233,9 +248,9 @@ colnames(kreslong) <- paste0("Kau_",colnames(kreslong))
 colnames(prlong) <- paste0("PR_",colnames(prlong))
 #plot
 comb <- cbind(kreslong,prlong)
-sigcomb <- comb %>% filter(PR_P<0.05|Kau_P<0.05) 
-sigpplot <- sigcomb %>% ggplot(aes(y=PR_P,x=Kau_P))+geom_point()+geom_abline(slope=1,lty=2,col="red")+scale_y_continuous(limits=c(0,0.087))+scale_x_continuous(limits=c(0,0.087))+xlab("Kau Index p-value")+ylab("Probability Ratio p-value")
-sigeffplot <- sigcomb %>% ggplot(aes(y=abs(PR_EffectSize),x=abs(Kau_EffectSize)))+geom_point()+geom_abline(slope=1,lty=2,col="red")+scale_y_continuous(limits=c(0,10.6))+scale_x_continuous(limits=c(0,10.6))+xlab("Absolute Kau Effect Size\n(SSMD MAL/CON)")+ylab("Absolute Probability Ratio\nEffect Size (SSMD MAL/CON)")
+sigcomb <- comb %>% filter(PR_P<thresh|Kau_P<thresh) 
+sigpplot <- sigcomb %>% ggplot(aes(y=PR_P,x=Kau_P))+geom_point()+geom_abline(slope=1,lty=2,col="red")+scale_y_continuous(limits=c(0,0.1))+scale_x_continuous(limits=c(0,0.1))+xlab("Kau Index p-value")+ylab("Probability Ratio p-value")
+sigeffplot <- sigcomb %>% ggplot(aes(y=abs(PR_EffectSize),x=abs(Kau_EffectSize)))+geom_point()+geom_abline(slope=1,lty=2,col="red")+scale_y_continuous(limits=c(0,4))+scale_x_continuous(limits=c(0,4))+xlab("Absolute Kau Effect Size\n(SSMD MAL/CON)")+ylab("Absolute Probability Ratio\nEffect Size (SSMD MAL/CON)")
 
 peff <- plot_grid(sigpplot,sigeffplot,nrow=1,align = "hv",rel_widths = c(0.9,1))
 
@@ -245,7 +260,7 @@ peff
 
 # Comparing within group variation between the scores
 
-The Probability Ratio appears more powered to detect differences (lower p-values and higher mean differences). This plot will look at the coefficient of variation within each taxa and each experimental group (age*diet) to see if this is due to reduced variance in score estimates in the Probability Ratio, as seen in the simulations.
+This plot will look at the coefficient of variation within each taxa and each experimental group (age*diet) to see if there is reduced variance in score estimates in the Probability Ratio, as seen in the simulations.
 
 ```{r cov, fig.width=8, fig.height=8, include=T}
 cv <- function(vals){

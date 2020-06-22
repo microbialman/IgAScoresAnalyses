@@ -27,7 +27,7 @@ library(phenoDist)#remotes::install_github("Swarchal/phenoDist)
 library(vegan)
 
 #keep uniformity across plots
-theme_set(theme_pubclean())
+theme_set(theme_pubr())
 
 ```
 
@@ -179,7 +179,7 @@ plot(screenedplot)
 summedscreen <- rbind(screena,"g__;s__Other"=1-colSums(screena))
 longa <- summedscreen %>% rownames_to_column("ASV") %>% gather("Sample","Abundance",-ASV) %>% add_column(Fraction=meta$SortFraction[match(.$Sample,meta$SampleID)], Group=meta$Group[match(.$Sample,meta$SampleID)], Individual=meta$Individual[match(.$Sample,meta$SampleID)]) %>% add_column(ASVName=ifelse(taxnamesplit(.$ASV,"species")=="NA",taxnamesplit(.$ASV,"genus"),taxnamesplit(.$ASV,"species")))
 
-longa %>% ggplot(aes(x=Individual,y=Abundance,fill=ASVName))+geom_col()+facet_grid(Group~Fraction,scales="free")+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())+scale_fill_igv()+labs(fill="ASV",x="Mouse")+theme(legend.text = element_text(size=8),legend.spacing.x =unit(2,"pt"),legend.title = element_blank())
+longa %>% ggplot(aes(x=Individual,y=Abundance,fill=ASVName))+geom_col()+facet_grid(Group~Fraction,scales="free")+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())+scale_fill_igv()+labs(fill="ASV",x="Mouse")+theme(legend.text = element_text(size=10),legend.spacing.x =unit(2,"pt"),legend.title = element_blank(),axis.text=element_text(size=12))
 ```
 
 ```{r mds_calc, include=F, echo=F}
@@ -188,7 +188,7 @@ bray <- t(summedscreen) %>% metaMDS(distance="bray")
 bmet <- cbind(meta,bray$points)
 ```
 ```{r mds_plot, include=T, fig.width=7, fig.height=6}
-bmet %>% mutate(SortFraction=factor(SortFraction,levels=c("Neg","Pos","Pre-sort"))) %>% ggplot(aes(x=MDS1,y=MDS2,col=SortFraction,shape=Group))+geom_point(size=5)+scale_shape_manual(values=c(19,8))+scale_color_d3()+theme(legend.title = element_blank())
+bmet %>% mutate(SortFraction=factor(SortFraction,levels=c("Neg","Pos","Pre-sort"))) %>% ggplot(aes(x=MDS1,y=MDS2,col=SortFraction,shape=Group))+geom_point(size=5)+scale_shape_manual(values=c(19,8))+scale_color_d3()+theme(legend.title = element_blank(),axis.text=element_text(size=16))
 
 ```
 
@@ -228,7 +228,7 @@ pseudo <- 1e-3
 ```{r, include=T, fig.width=5, fig.height=4.4}
 
 df <- data.frame(Group=rep(igameta$Group,2),FracSize=c(igameta$NegFrac,igameta$PosFrac),Frac=c(rep("IgA-",nrow(igameta)),rep("IgA+",nrow(igameta))))
-df %>% ggplot(aes(x=Group,y=FracSize,col=Group))+geom_boxplot(outlier.shape=NA)+geom_point()+facet_wrap(.~Frac,scales = "free")+ylab("Fraction Size (% Bacteria)")+theme(axis.title.x = element_blank())+
+df %>% ggplot(aes(x=Group,y=FracSize,col=Group))+geom_boxplot(outlier.shape=NA)+geom_point()+facet_wrap(.~Frac,scales = "free")+ylab("Fraction Size (% Bacteria)")+theme(axis.title.x = element_blank(),axis.text.y=element_text(size=13))+
   scale_color_manual(values=c("black","red"))
 ```
 ```{r, include=T, fig.width=5, fig.height=4.4}
@@ -295,21 +295,19 @@ Comapring the IgA binding of each species between the two different groups (aIL1
 CompareCond <- function(tab,cutoff,palm=F){
   ps <- c()
   means <- c()
-  #remove hh as the estimates are all 0 for one conditon negating comparisons
-  tab <- tab %>% filter(!grepl("Helico",Taxa))
-  
+
   #small sample sizes so calculate p using all possible permuations of mean difference
   for(i in unique(tab$Taxa)){
     ail <- na.omit(tab$Score[tab$Condition=="aIL10R"&tab$Taxa==i])
     hh <- na.omit(tab$Score[tab$Condition=="Hh+aIL10R"&tab$Taxa==i])
     p <- NA
-    if(length(ail)==4&length(hh)==4){
+    if(length(ail)>=3&length(hh)>=3){
       diff <- abs(mean(ail)-mean(hh))
       #calculate all posisble permuations
       allvals <- c(ail,hh)
-      allperm <- permn(c(1:8))
+      allperm <- permn(c(1:length(allvals)))
       #test perms
-      permmeans <- unlist(lapply(allperm, function(x) abs(mean(allvals[x[1:4]])-mean(allvals[x[5:8]]))))
+      permmeans <- unlist(lapply(allperm, function(x) abs( mean(allvals[x[1:length(ail)]]) - mean(allvals[x[(length(ail)+1):length(allvals)]]) ) ))
       #p is how many of all the tests the differ greater or equal than the true difference
       p <- mean(permmeans>=diff)
     }
@@ -321,17 +319,17 @@ CompareCond <- function(tab,cutoff,palm=F){
   #get order of mean Iga score to sort plot
   means <- tab %>% group_by(Taxa) %>% summarise(Means=mean(Score)) %>% arrange(Means)
   #raw plot of mean and 95% ci for each of the groups (boxplot not too informative with 4 samples)
-  plot <- tab %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% ggplot(aes(x=Taxa,y=Score,col=Condition))+stat_summary(position = position_dodge(width = 0.5),fun.data = "mean_ci")+geom_point(position=position_dodge(width=0.5),shape=9)+coord_flip()+scale_color_manual(values=c("black","red"))+theme(axis.title.y = element_blank())
+  plot <- tab %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% ggplot(aes(x=Taxa,y=Score,col=Condition))+stat_summary(position = position_dodge(width = 0.5),fun.data = "mean_ci")+geom_point(position=position_dodge(width=0.5),shape=9)+coord_flip()+scale_color_manual(values=c("black","red"))+theme(axis.title.y = element_blank())+theme(axis.text.y=element_text(face="bold"),axis.text.x=element_text(size=14))
   #just plot significant differences, toggle to add Akkermansia to the Palm plot (used for the supplementary figure)
   sigres <-  restab %>% filter(p<cutoff)
   splottax <- unique(as.character(sigres$Taxa))
   if(palm==T){
     splottax <- c(splottax,"Akkermansia;s__Akkermansia_muciniphila(AY271254)")
   }
-  sigplot <- tab %>% filter(Taxa%in%splottax) %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% ggplot(aes(x=Taxa,y=Score,col=Condition))+stat_summary(position = position_dodge(width = 0.5),fun.data = "mean_ci")+geom_point(position=position_dodge(width=0.5),shape=9)+coord_flip()+scale_color_manual(values=c("black","red"))+theme(axis.title.y = element_blank())+geom_hline(yintercept = 0, col="lightgrey")
+  sigplot <- tab %>% filter(Taxa%in%splottax) %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% ggplot(aes(x=Taxa,y=Score,col=Condition))+stat_summary(position = position_dodge(width = 0.5),fun.data = "mean_ci")+geom_point(position=position_dodge(width=0.5),shape=9)+coord_flip()+scale_color_manual(values=c("black","red"))+theme(axis.title.y = element_blank())+geom_hline(yintercept = 0, col="lightgrey",lty=2)+theme(axis.text.y=element_text(face="bold"),axis.text.x=element_text(size=14))
   #get the effect size for signficant differences (use strictly standardised mean difference - mean difference normalised to SD to make comparable between scores)
   fcp <- tab %>% filter(Taxa%in%splottax) %>% mutate(Taxa=factor(Taxa,levels=means$Taxa)) %>% group_by(Taxa) %>%  summarise(SSMD=ssmd(c(Score[Condition=="Hh+aIL10R"]),c(Score[Condition=="aIL10R"]),verbose = F)) %>% add_column(Dir=ifelse(.$SSMD>0,"A","B")) %>%
-    ggplot(aes(x=Taxa,y=SSMD,fill=Dir))+geom_col(position = position_dodge(width=0.5), width = 0.3)+coord_flip()+theme(axis.title.y = element_blank(),axis.text.y = element_blank(),axis.ticks.y = element_blank())+ylab("Strictly standardised\nmean difference")+scale_fill_manual(values=c("forestgreen","darkred"))+guides(fill=F)+geom_hline(yintercept = 0, col="lightgrey")
+    ggplot(aes(x=Taxa,y=SSMD,fill=Dir))+geom_col(position = position_dodge(width=0.5), width = 0.3)+coord_flip()+theme(axis.title.y = element_blank(),axis.text.y = element_blank(),axis.ticks.y = element_blank())+ylab("SSMD")+scale_fill_manual(values=c("forestgreen","darkred"))+guides(fill=F)+geom_hline(yintercept = 0, col="lightgrey",lty=2)+theme(axis.text.x=element_text(size=14))
   #put the effect size plot alongside the values plot
   sigwitheffsize=plot_grid(sigplot,fcp,align="h",axis = "t",rel_widths = c(0.8,0.2))
   return(list(table=restab,barplot=plot,sigplot=sigwitheffsize))
@@ -383,14 +381,14 @@ plot(probcomp$sigplot)
 
 This bar chart will show how by adjusting for the amount of inital bacteria falling into the IgA+ fraction, the reduced relative abudance of Akkermanisa in the IgA+ fraction still represents an increase in bound Akkermansia overall.
 
-```{r akker, include=T, fig.height=5, fig.width=6}
+```{r akker, include=T, fig.height=5, fig.width=8}
 akbunds <- as.vector(t(posabunds["p__Verrucomicrobia;c__Verrucomicrobiae;o__Verrucomicrobiales;f__Verrucomicrobiaceae;g__Akkermansia;s__Akkermansia_muciniphila(AY271254)",as.character(igameta$Individual)]))
 akmeta <- igameta %>% mutate(PosFrac=PosFrac/100) %>% add_column(Abund=akbunds) %>% add_column(AdjAbund=.$PosFrac*.$Abund) %>% select(Group,PosFrac,Abund,AdjAbund) %>% gather("Measure","Value",-Group) %>% mutate(Value=Value*100, Measure=factor(Measure))
 
 levels(akmeta$Measure) <- c("IgA+ A.muciniphila Abundance (%)","IgA+ A.muciniphila Abundance\nAdjusted for IgA+ Size (%)","IgA+ Size (%)")
 akmeta$Measure <- factor(akmeta$Measure,levels=levels(akmeta$Measure)[c(1,3,2)])
 
-akmeta %>% ggplot(aes(x=Group,y=Value,color=Group))+geom_boxplot(outlier.shape = NA)+geom_point()+facet_wrap(.~Measure,scales="free_y",strip.position = "left")+scale_color_manual(values=c("black","red"))+guides(fill=F)+ylab(NULL)+theme(axis.title.x = element_blank(),strip.placement = "outside",strip.background = element_blank())
+akmeta %>% ggplot(aes(x=Group,y=Value,color=Group))+geom_boxplot(outlier.shape = NA)+geom_point()+facet_wrap(.~Measure,scales="free_y",strip.position = "left")+scale_color_manual(values=c("black","red"))+guides(fill=F)+ylab(NULL)+theme(axis.title.x = element_blank(),strip.placement = "outside",strip.background = element_blank())+theme(axis.text = element_text(size=14))
 
 ```
 
