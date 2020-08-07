@@ -246,7 +246,7 @@ Below is the code used to generate the various scores using the IgAScores packag
 #generate the scores, note each methods requires different inputs
 palm <- igascores(posabunds = posabunds, negabunds=negabunds, pseudo = pseudo, method="palm")
 kau <- igascores(posabunds = posabunds, negabunds=negabunds, pseudo = pseudo, method="kau")
-posprob <- igascores(posabunds = posabunds, possizes = possizes, totabunds = wholeabunds, method="prob")
+posprob <- igascores(posabunds = posabunds, possizes = possizes, presortabunds = wholeabunds, method="prob")
 probrat <- igascores(posabunds = posabunds, negabunds = negabunds, possizes = possizes, negsizes = negsizes, pseudo = pseudo, method="probratio")
 
 ```

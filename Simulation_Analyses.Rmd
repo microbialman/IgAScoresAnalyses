@@ -40,7 +40,7 @@ invisible(list2env(dat,globalenv()))
 
 ## Distribution of IgA binding values per species
 
-Each of the **`r nrow(wholecounts)`** species has its own IgA value distribution. This is analgous to the differing IgA binding affinities of real taxa - which IgA-Seq aims to determine.
+Each of the **`r nrow(presortcounts)`** species has its own IgA value distribution. This is analgous to the differing IgA binding affinities of real taxa - which IgA-Seq aims to determine.
 In the simulation we use an arbitrary IgA binding value, its units are not important just that it provides a measure of binding relative between taxa. Below are the value distributions used in the simulation.
 The high and low cut-offs used to define the IgA postive and negative gates are also shown (dashed lines, everything to the right of the higher line being IgA +ve and to the left of the lower line IgA -ve).
 
@@ -59,10 +59,10 @@ Relative abundances were generated from simulated counts. These will be used to 
 
 ```{r gen_abund, include=T, fig.width=8, fig.height=4.8}
 
-wholel <- wholeabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pre-sort",nrow(.)))
+presortl <- presortabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pre-sort",nrow(.)))
 posl <- posabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pos",nrow(.)))
 negl <- negabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Neg",nrow(.)))
-combinedl <- rbind(wholel,posl,negl) %>% mutate(Sample=factor(Sample,levels=colnames(wholeabunds)), Species=factor(Species,levels=speclevs),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg")))
+combinedl <- rbind(presortl,posl,negl) %>% mutate(Sample=factor(Sample,levels=colnames(presortabunds)), Species=factor(Species,levels=speclevs),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg")))
 
 combinedl %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(.~Fraction)+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())+theme(axis.text = element_text(size=10),legend.text = element_text(size=15))
 
@@ -72,7 +72,7 @@ combinedl %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_gr
 
 ```{r frac_sizes, include=T, fig.width=7, fig.height=3}
 
-fracsizes <- data.frame(Fraction=c(rep("Pos",length(possizes)),rep("Neg",length(negsizes))),Size=c(possizes,negsizes),Sample=rep(names(possizes),2)) %>% mutate(Sample=str_replace(Sample,"Sample","")) %>% mutate(Sample=factor(Sample,levels=c(1:ncol(wholeabunds))))
+fracsizes <- data.frame(Fraction=c(rep("Pos",length(possizes)),rep("Neg",length(negsizes))),Size=c(possizes,negsizes),Sample=rep(names(possizes),2)) %>% mutate(Sample=str_replace(Sample,"Sample","")) %>% mutate(Sample=factor(Sample,levels=c(1:ncol(presortabunds))))
 
 fracsizes %>% ggplot(aes(x=Sample,y=Size*100,fill=Fraction))+geom_col(position = "dodge")+scale_fill_d3()+xlab("Sample")+ylab("Size (% Bacteria)")+
   theme(axis.text.y=element_text(size=14))
@@ -84,12 +84,12 @@ fracsizes %>% ggplot(aes(x=Sample,y=Size*100,fill=Fraction))+geom_col(position =
 Scores are generated to quantify the IgA binding from the simulated data using the various scoring approaches. As we know the underlying distribution of mean IgA scores, we now have a "gold-standard" to compare the index estimates against. We also know that the IgA binding means should be identical in all the samples, so the level of variance in the scores will show how influenced they are by the starting abundances (which is the only thing that differs between samples).
 
 ```{r make_scores}
-#pseudo count is set by looking at the range of the minimum non-zero values in the pos, whole and neg abundance tables. The lowest being 1e-5
+#pseudo count is set by looking at the range of the minimum non-zero values in the pos, presort and neg abundance tables. The lowest being 1e-5
 pseudo=1e-5
 
 palm <- igascores(posabunds = posabunds,negabunds=negabunds, pseudo = pseudo, method="palm")
 kau <- igascores(posabunds = posabunds,negabunds=negabunds, pseudo = pseudo, method="kau")
-posprob <- igascores(posabunds = posabunds, possizes = possizes, totabunds = wholeabunds, method="prob")
+posprob <- igascores(posabunds = posabunds, possizes = possizes, presortabunds = presortabunds, method="prob")
 probrat <- igascores(posabunds = posabunds, negabunds = negabunds, possizes = possizes, negsizes = negsizes, pseudo = pseudo, method="probratio")
 
 ```
@@ -166,14 +166,14 @@ betweendat$igabinding %>% ggplot(aes(x=IgAValue,color=Species))+geom_density()+g
 
 ## Taxonomic abundances
 
-Relative abundances were generated from simulated counts. These will be used to generate scores. In this case, additional counts were added to **`r betweendat$expspecies`** in **Sample`r round(ncol(betweendat$wholeabunds)/2)`** to **Sample`r ncol(betweendat$wholeabunds)`**.
+Relative abundances were generated from simulated counts. These will be used to generate scores. In this case, additional counts were added to **`r betweendat$expspecies`** in **Sample`r round(ncol(betweendat$presortabunds)/2)`** to **Sample`r ncol(betweendat$presortabunds)`**.
 
 ```{r gen_abund_bet, include=T, fig.width=8, fig.height=4.8}
 
-wholelb <- betweendat$wholeabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pre-sort",nrow(.)))
+presortlb <- betweendat$presortabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pre-sort",nrow(.)))
 poslb <- betweendat$posabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Pos",nrow(.)))
 neglb <- betweendat$negabunds %>% rownames_to_column(var="Species") %>% gather("Sample","Abundance",-Species) %>% add_column(Fraction=rep("Neg",nrow(.)))
-combinedlb <- rbind(wholelb,poslb,neglb) %>% mutate(Sample=factor(Sample,levels=colnames(betweendat$wholeabunds)),Species=factor(Species,levels=rownames(betweendat$wholeabunds)),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg"))) %>% add_column(Group=ifelse(betweendat$expgroup[.$Sample]=="1","Control","Case"))
+combinedlb <- rbind(presortlb,poslb,neglb) %>% mutate(Sample=factor(Sample,levels=colnames(betweendat$presortabunds)),Species=factor(Species,levels=rownames(betweendat$presortabunds)),Fraction=factor(Fraction,levels=c("Pre-sort","Pos","Neg"))) %>% add_column(Group=ifelse(betweendat$expgroup[.$Sample]=="1","Control","Case"))
 
 combinedlb %>% ggplot(aes(x=Sample,y=Abundance,fill=Species))+geom_col()+facet_grid(Group~Fraction,scales="free")+scale_fill_d3()+coord_flip()+theme(axis.ticks.y=element_blank(), axis.text.y=element_blank())+theme(axis.text = element_text(size=10),legend.text = element_text(size=15))
 
@@ -203,12 +203,12 @@ fracsizesb %>% ggplot(aes(x=Group,y=Size*100))+geom_boxplot(aes(fill=Fraction),o
 # Compare scores
 
 ```{r make_scores_bet}
-#pseudo count is set by looking at the range of the minimum non-zero values in the pos, whole and neg abundance tables. The lowest being 1e-5
+#pseudo count is set by looking at the range of the minimum non-zero values in the pos, presort and neg abundance tables. The lowest being 1e-5
 pseudo=1e-5
 
 palmb <- igascores(posabunds = betweendat$posabunds,negabunds=betweendat$negabunds, pseudo = pseudo, method="palm")
 kaub <- igascores(posabunds = betweendat$posabunds,negabunds=betweendat$negabunds, pseudo = pseudo, method="kau")
-posprobb <- igascores(posabunds = betweendat$posabunds, possizes = betweendat$possizes, totabunds = betweendat$wholeabunds, method="prob")
+posprobb <- igascores(posabunds = betweendat$posabunds, possizes = betweendat$possizes, presortabunds = betweendat$presortabunds, method="prob")
 probratb <- igascores(posabunds = betweendat$posabunds, negabunds = betweendat$negabunds, possizes = betweendat$possizes, negsizes = betweendat$negsizes, pseudo = pseudo, method="probratio")
 
 ```
